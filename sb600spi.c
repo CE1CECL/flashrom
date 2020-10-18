@@ -124,7 +124,7 @@ static enum amd_chipset determine_generation(struct pci_dev *dev)
 		if (rev == 0x4a) {
 			msg_pdbg("Yangtze detected.\n");
 			return CHIPSET_YANGTZE;
-		} else if (rev == 0x59 || rev == 0x61) {
+		} else if (rev == 0x51 || rev == 0x59 || rev == 0x61) {
 			RZN32BM = mmio_readb(sb600_spibar + 0x50) & 0x1;
 			amd_gen = CHIPSET_YANGTZE;
 			msg_pdbg("Ryzen detected.\n");
