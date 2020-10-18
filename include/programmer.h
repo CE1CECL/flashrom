@@ -24,6 +24,8 @@
 
 #include "flash.h"	/* for chipaddr and flashctx */
 
+extern uint8_t RZN32BM;
+
 enum programmer_type {
 	PCI = 1, /* to detect uninitialized values */
 	USB,
