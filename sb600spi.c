@@ -125,9 +125,10 @@ static enum amd_chipset determine_generation(struct pci_dev *dev)
 			msg_pdbg("Yangtze detected.\n");
 			return CHIPSET_YANGTZE;
 		} else if (rev == 0x51 || rev == 0x59 || rev == 0x61) {
-			RZN32BM = mmio_readb(sb600_spibar + 0x50) & 0x1;
-			amd_gen = CHIPSET_YANGTZE;
+			//RZN32BM = mmio_readb(sb600_spibar + 0x50) & 0x1;
+			//amd_gen = CHIPSET_YANGTZE;
 			msg_pdbg("Ryzen detected.\n");
+			return CHIPSET_YANGTZE;
 		/**
 		 * FCH chipsets called 'Promontory' are one's with the
 		 * so-called SPI100 ip core that uses memory mapping and
