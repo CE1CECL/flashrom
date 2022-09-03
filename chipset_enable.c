@@ -33,11 +33,15 @@
 #include <errno.h>
 #include "flash.h"
 #include "programmer.h"
-#include "hwaccess.h"
+#include "hwaccess_physmap.h"
+#include "platform/pci.h"
 
 #define NOT_DONE_YET 1
 
 #if defined(__i386__) || defined(__x86_64__)
+
+#include "hwaccess_x86_io.h"
+#include "hwaccess_x86_msr.h"
 
 static int enable_flash_ali_m1533(struct pci_dev *dev, const char *name)
 {
@@ -116,11 +120,11 @@ static struct pci_dev *find_southbridge(uint16_t vendor, const char *name)
 {
 	struct pci_dev *sbdev;
 
-	sbdev = pci_dev_find_vendorclass(vendor, 0x0601);
+	sbdev = pcidev_find_vendorclass(vendor, 0x0601);
 	if (!sbdev)
-		sbdev = pci_dev_find_vendorclass(vendor, 0x0680);
+		sbdev = pcidev_find_vendorclass(vendor, 0x0680);
 	if (!sbdev)
-		sbdev = pci_dev_find_vendorclass(vendor, 0x0000);
+		sbdev = pcidev_find_vendorclass(vendor, 0x0000);
 	if (!sbdev)
 		msg_perr("No southbridge found for %s!\n", name);
 	if (sbdev)
@@ -424,7 +428,7 @@ static int enable_flash_ich_fwh_decode(struct pci_dev *dev, enum ich_chipset ich
 		break;
 	}
 
-	char *idsel = extract_programmer_param("fwh_idsel");
+	char *idsel = extract_programmer_param_str("fwh_idsel");
 	if (idsel && strlen(idsel)) {
 		if (!implemented) {
 			msg_perr("Error: fwh_idsel= specified, but (yet) unsupported on this chipset.\n");
@@ -600,7 +604,13 @@ static enum chipbustype enable_flash_ich_report_gcs(
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
+	case CHIPSET_ELKHART_LAKE:
 	case CHIPSET_APOLLO_LAKE:
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
 		reg_name = "BIOS_SPI_BC";
 		gcs = pci_read_long(dev, 0xdc);
 		bild = (gcs >> 7) & 1;
@@ -652,6 +662,9 @@ static enum chipbustype enable_flash_ich_report_gcs(
 	static const struct boot_straps boot_straps_pch8_lp[] =
 		{ { "SPI", BUS_SPI },
 		  { "LPC", BUS_LPC | BUS_FWH } };
+	static const struct boot_straps boot_straps_pch500[] =
+		{ { "SPI", BUS_SPI },
+		  { "eSPI", BUS_NONE } };
 	static const struct boot_straps boot_straps_apl[] =
 		{ { "SPI", BUS_SPI },
 		  { "reserved", BUS_NONE } };
@@ -698,7 +711,15 @@ static enum chipbustype enable_flash_ich_report_gcs(
 	case CHIPSET_400_SERIES_COMET_POINT:
 		boot_straps = boot_straps_pch8_lp;
 		break;
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
+		boot_straps = boot_straps_pch500;
+		break;
 	case CHIPSET_APOLLO_LAKE:
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
+	case CHIPSET_ELKHART_LAKE:
 		boot_straps = boot_straps_apl;
 		break;
 	case CHIPSET_8_SERIES_WELLSBURG: // FIXME: check datasheet
@@ -725,7 +746,13 @@ static enum chipbustype enable_flash_ich_report_gcs(
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
 	case CHIPSET_APOLLO_LAKE:
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
+	case CHIPSET_ELKHART_LAKE:
 		bbs = (gcs >> 6) & 0x1;
 		break;
 	default:
@@ -971,9 +998,39 @@ static int enable_flash_pch400(struct pci_dev *const dev, const char *const name
 	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_400_SERIES_COMET_POINT);
 }
 
+static int enable_flash_pch500(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_500_SERIES_TIGER_POINT);
+}
+
+static int enable_flash_pch600(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_600_SERIES_ALDER_POINT);
+}
+
+static int enable_flash_mtl(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_METEOR_LAKE);
+}
+
+static int enable_flash_mcc(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_ELKHART_LAKE);
+}
+
+static int enable_flash_jsl(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x1f, 5, CHIPSET_JASPER_LAKE);
+}
+
 static int enable_flash_apl(struct pci_dev *const dev, const char *const name)
 {
 	return enable_flash_pch100_or_c620(dev, name, 0x0d, 2, CHIPSET_APOLLO_LAKE);
+}
+
+static int enable_flash_glk(struct pci_dev *const dev, const char *const name)
+{
+	return enable_flash_pch100_or_c620(dev, name, 0x0d, 2, CHIPSET_GEMINI_LAKE);
 }
 
 /* Silvermont architecture: Bay Trail(-T/-I), Avoton/Rangeley.
@@ -996,6 +1053,8 @@ static int enable_flash_silvermont(struct pci_dev *dev, const char *name)
 
 	/* Handle GCS (in RCRB) */
 	void *rcrb = physmap("BYT RCRB", rcba, 4);
+	if (rcrb == ERROR_PTR)
+		return ERROR_FATAL;
 	const enum chipbustype boot_buses = enable_flash_ich_report_gcs(dev, ich_generation, rcrb);
 	physunmap(rcrb, 4);
 
@@ -1010,6 +1069,8 @@ static int enable_flash_silvermont(struct pci_dev *dev, const char *name)
 	uint32_t sbase = pci_read_long(dev, 0x54) & 0xfffffe00;
 	msg_pdbg("SPI_BASE_ADDRESS = 0x%x\n", sbase);
 	void *spibar = rphysmap("BYT SBASE", sbase, 512); /* Last defined address on Bay Trail is 0x100 */
+	if (spibar == ERROR_PTR)
+		return ERROR_FATAL;
 
 	/* Enable Flash Writes.
 	 * Silvermont-based: BCR at SBASE + 0xFC (some bits of BCR are also accessible via BC at IBASE + 0x1C).
@@ -1072,7 +1133,7 @@ static int enable_flash_vt823x(struct pci_dev *dev, const char *name)
 
 static int enable_flash_vt_vx(struct pci_dev *dev, const char *name)
 {
-	struct pci_dev *south_north = pci_dev_find(0x1106, 0xa353);
+	struct pci_dev *south_north = pcidev_find(0x1106, 0xa353);
 	if (south_north == NULL) {
 		msg_perr("Could not find South-North Module Interface Control device!\n");
 		return ERROR_FATAL;
@@ -1211,21 +1272,21 @@ static int enable_flash_cs5536(struct pci_dev *dev, const char *name)
 	msr_t msr;
 
 	/* Geode only has a single core */
-	if (setup_cpu_msr(0))
+	if (msr_setup(0))
 		return -1;
 
-	msr = rdmsr(MSR_RCONF_DEFAULT);
+	msr = msr_read(MSR_RCONF_DEFAULT);
 	if ((msr.hi >> 24) != 0x22) {
 		msr.hi &= 0xfbffffff;
-		wrmsr(MSR_RCONF_DEFAULT, msr);
+		msr_write(MSR_RCONF_DEFAULT, msr);
 	}
 
-	msr = rdmsr(MSR_NORF_CTL);
+	msr = msr_read(MSR_NORF_CTL);
 	/* Raise WE_CS3 bit. */
 	msr.lo |= 0x08;
-	wrmsr(MSR_NORF_CTL, msr);
+	msr_write(MSR_NORF_CTL, msr);
 
-	cleanup_cpu_msr();
+	msr_cleanup();
 
 #undef MSR_RCONF_DEFAULT
 #undef MSR_NORF_CTL
@@ -1512,7 +1573,7 @@ static int enable_flash_sb400(struct pci_dev *dev, const char *name)
 	struct pci_dev *smbusdev;
 
 	/* Look for the SMBus device. */
-	smbusdev = pci_dev_find(0x1002, 0x4372);
+	smbusdev = pcidev_find(0x1002, 0x4372);
 
 	if (!smbusdev) {
 		msg_perr("ERROR: SMBus device not found. Aborting.\n");
@@ -1826,8 +1887,8 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0x1c4a, B_FS,   DEP, "Intel", "H67",				enable_flash_pch6},
 	{0x8086, 0x1c4b, B_FS,   NT,  "Intel", "HM67",				enable_flash_pch6},
 	{0x8086, 0x1c4c, B_FS,   NT,  "Intel", "Q65",				enable_flash_pch6},
-	{0x8086, 0x1c4d, B_FS,   NT,  "Intel", "QS67",				enable_flash_pch6},
-	{0x8086, 0x1c4e, B_FS,   NT,  "Intel", "Q67",				enable_flash_pch6},
+	{0x8086, 0x1c4d, B_FS,   DEP, "Intel", "QS67",				enable_flash_pch6},
+	{0x8086, 0x1c4e, B_FS,   DEP, "Intel", "Q67",				enable_flash_pch6},
 	{0x8086, 0x1c4f, B_FS,   DEP, "Intel", "QM67",				enable_flash_pch6},
 	{0x8086, 0x1c50, B_FS,   NT,  "Intel", "B65",				enable_flash_pch6},
 	{0x8086, 0x1c52, B_FS,   NT,  "Intel", "C202",				enable_flash_pch6},
@@ -1836,13 +1897,16 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0x1c5c, B_FS,   DEP, "Intel", "H61",				enable_flash_pch6},
 	{0x8086, 0x1d40, B_FS,   DEP, "Intel", "C60x/X79",			enable_flash_pch6},
 	{0x8086, 0x1d41, B_FS,   DEP, "Intel", "C60x/X79",			enable_flash_pch6},
+	{0x8086, 0x1e41, B_FS,   DEP, "Intel", "Desktop Sample",		enable_flash_pch7},
+	{0x8086, 0x1e42, B_FS,   DEP, "Intel", "Mobile Sample",			enable_flash_pch7},
+	{0x8086, 0x1e43, B_FS,   DEP, "Intel", "SFF Sample",			enable_flash_pch7},
 	{0x8086, 0x1e44, B_FS,   DEP, "Intel", "Z77",				enable_flash_pch7},
 	{0x8086, 0x1e46, B_FS,   NT,  "Intel", "Z75",				enable_flash_pch7},
 	{0x8086, 0x1e47, B_FS,   DEP, "Intel", "Q77",				enable_flash_pch7},
 	{0x8086, 0x1e48, B_FS,   DEP, "Intel", "Q75",				enable_flash_pch7},
 	{0x8086, 0x1e49, B_FS,   DEP, "Intel", "B75",				enable_flash_pch7},
 	{0x8086, 0x1e4a, B_FS,   DEP, "Intel", "H77",				enable_flash_pch7},
-	{0x8086, 0x1e53, B_FS,   NT,  "Intel", "C216",				enable_flash_pch7},
+	{0x8086, 0x1e53, B_FS,   DEP, "Intel", "C216",				enable_flash_pch7},
 	{0x8086, 0x1e55, B_FS,   DEP, "Intel", "QM77",				enable_flash_pch7},
 	{0x8086, 0x1e56, B_FS,   DEP, "Intel", "QS77",				enable_flash_pch7},
 	{0x8086, 0x1e57, B_FS,   DEP, "Intel", "HM77",				enable_flash_pch7},
@@ -1954,7 +2018,7 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0x8cc1, B_FS,   NT,  "Intel", "9 Series",			enable_flash_pch9},
 	{0x8086, 0x8cc2, B_FS,   NT,  "Intel", "9 Series Engineering Sample",	enable_flash_pch9},
 	{0x8086, 0x8cc3, B_FS,   NT,  "Intel", "9 Series",			enable_flash_pch9},
-	{0x8086, 0x8cc4, B_FS,   NT,  "Intel", "Z97",				enable_flash_pch9},
+	{0x8086, 0x8cc4, B_FS,   DEP, "Intel", "Z97",				enable_flash_pch9},
 	{0x8086, 0x8cc6, B_FS,   NT,  "Intel", "H97",				enable_flash_pch9},
 	{0x8086, 0x8d40, B_FS,   NT,  "Intel", "C610/X99 (Wellsburg)",		enable_flash_pch8_wb},
 	{0x8086, 0x8d41, B_FS,   NT,  "Intel", "C610/X99 (Wellsburg)",		enable_flash_pch8_wb},
@@ -1995,7 +2059,7 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0x9cc1, B_FS,   NT,  "Intel", "Haswell U Sample",		enable_flash_pch9_lp},
 	{0x8086, 0x9cc2, B_FS,   NT,  "Intel", "Broadwell U Sample",		enable_flash_pch9_lp},
 	{0x8086, 0x9cc3, B_FS,   DEP, "Intel", "Broadwell U Premium",		enable_flash_pch9_lp},
-	{0x8086, 0x9cc5, B_FS,   NT,  "Intel", "Broadwell U Base",		enable_flash_pch9_lp},
+	{0x8086, 0x9cc5, B_FS,   DEP, "Intel", "Broadwell U Base",		enable_flash_pch9_lp},
 	{0x8086, 0x9cc6, B_FS,   NT,  "Intel", "Broadwell Y Sample",		enable_flash_pch9_lp},
 	{0x8086, 0x9cc7, B_FS,   NT,  "Intel", "Broadwell Y Premium",		enable_flash_pch9_lp},
 	{0x8086, 0x9cc9, B_FS,   NT,  "Intel", "Broadwell Y Base",		enable_flash_pch9_lp},
@@ -2013,9 +2077,11 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0x9d58, B_S,    NT,  "Intel", "Kaby Lake U Premium",		enable_flash_pch100},
 	{0x8086, 0x9d84, B_S,    DEP, "Intel", "Cannon Lake U Premium",		enable_flash_pch300},
 	{0x8086, 0x0284, B_S,    DEP, "Intel", "Comet Lake U Premium",		enable_flash_pch400},
+	{0x8086, 0x0285, B_S,    DEP, "Intel", "Comet Lake U Base",		enable_flash_pch400},
+	{0x8086, 0xa082, B_S,    DEP, "Intel", "Tiger Lake U Premium",		enable_flash_pch500},
 	{0x8086, 0xa141, B_S,    NT,  "Intel", "Sunrise Point Desktop Sample",	enable_flash_pch100},
 	{0x8086, 0xa142, B_S,    NT,  "Intel", "Sunrise Point Unknown Sample",	enable_flash_pch100},
-	{0x8086, 0xa143, B_S,    NT,  "Intel", "H110",				enable_flash_pch100},
+	{0x8086, 0xa143, B_S,    DEP, "Intel", "H110",				enable_flash_pch100},
 	{0x8086, 0xa144, B_S,    NT,  "Intel", "H170",				enable_flash_pch100},
 	{0x8086, 0xa145, B_S,    NT,  "Intel", "Z170",				enable_flash_pch100},
 	{0x8086, 0xa146, B_S,    NT,  "Intel", "Q170",				enable_flash_pch100},
@@ -2057,18 +2123,25 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0xa247, B_S,    NT,  "Intel", "C620 Series Chipset Supersku",	enable_flash_c620},
 	{0x8086, 0xa248, B_S,    NT,  "Intel", "C620 Series Chipset Supersku",	enable_flash_c620},
 	{0x8086, 0xa249, B_S,    NT,  "Intel", "C620 Series Chipset Supersku",	enable_flash_c620},
+	{0x8086, 0x1bca, B_S,    NT,  "Intel", "Emmitsburg Chipset SKU",	enable_flash_c620},
 	{0x8086, 0xa2c4, B_S,    NT,  "Intel", "H270",				enable_flash_pch100},
 	{0x8086, 0xa2c5, B_S,    NT,  "Intel", "Z270",				enable_flash_pch100},
 	{0x8086, 0xa2c6, B_S,    NT,  "Intel", "Q270",				enable_flash_pch100},
 	{0x8086, 0xa2c7, B_S,    NT,  "Intel", "Q250",				enable_flash_pch100},
 	{0x8086, 0xa2c8, B_S,    NT,  "Intel", "B250",				enable_flash_pch100},
 	{0x8086, 0xa2c9, B_S,    NT,  "Intel", "Z370",				enable_flash_pch100},
+	{0x8086, 0xa2ca, B_S,    DEP, "Intel", "H310C",				enable_flash_pch100},
+	{0x8086, 0xa2cc, B_S,    DEP, "Intel", "B365",				enable_flash_pch100},
 	{0x8086, 0xa2d2, B_S,    NT,  "Intel", "X299",				enable_flash_pch100},
 	{0x8086, 0x5ae8, B_S,    DEP, "Intel", "Apollo Lake",			enable_flash_apl},
 	{0x8086, 0x5af0, B_S,    DEP, "Intel", "Apollo Lake",			enable_flash_apl},
+	{0x8086, 0x3197, B_S,    NT,  "Intel", "Gemini Lake",			enable_flash_glk},
+	{0x8086, 0x31e8, B_S,    DEP, "Intel", "Gemini Lake",			enable_flash_glk},
+	{0x8086, 0x4da4, B_S,    DEP, "Intel", "Jasper Lake",			enable_flash_jsl},
+	{0x8086, 0x4b24, B_S,    DEP, "Intel", "Elkhart Lake",			enable_flash_mcc},
 	{0x8086, 0xa303, B_S,    NT,  "Intel", "H310",				enable_flash_pch300},
 	{0x8086, 0xa304, B_S,    NT,  "Intel", "H370",				enable_flash_pch300},
-	{0x8086, 0xa305, B_S,    NT,  "Intel", "Z390",				enable_flash_pch300},
+	{0x8086, 0xa305, B_S,    DEP, "Intel", "Z390",				enable_flash_pch300},
 	{0x8086, 0xa306, B_S,    NT,  "Intel", "Q370",				enable_flash_pch300},
 	{0x8086, 0xa308, B_S,    NT,  "Intel", "B360",				enable_flash_pch300},
 	{0x8086, 0xa309, B_S,    NT,  "Intel", "C246",				enable_flash_pch300},
@@ -2077,6 +2150,34 @@ const struct penable chipset_enables[] = {
 	{0x8086, 0xa30d, B_S,    NT,  "Intel", "HM370",				enable_flash_pch300},
 	{0x8086, 0xa30e, B_S,    DEP, "Intel", "CM246",				enable_flash_pch300},
 	{0x8086, 0x3482, B_S,    DEP, "Intel", "Ice Lake U Premium",		enable_flash_pch300},
+	{0x8086, 0x0684, B_S,    NT,  "Intel", "H470",				enable_flash_pch400},
+	{0x8086, 0x0685, B_S,    NT,  "Intel", "Z490",				enable_flash_pch400},
+	{0x8086, 0x0687, B_S,    NT,  "Intel", "Q470",				enable_flash_pch400},
+	{0x8086, 0x068c, B_S,    NT,  "Intel", "QM480",				enable_flash_pch400},
+	{0x8086, 0x068d, B_S,    NT,  "Intel", "HM470",				enable_flash_pch400},
+	{0x8086, 0x068e, B_S,    NT,  "Intel", "WM490",				enable_flash_pch400},
+	{0x8086, 0x0697, B_S,    NT,  "Intel", "W480",				enable_flash_pch400},
+	{0x8086, 0x4384, B_S,    NT,  "Intel", "Q570",				enable_flash_pch500},
+	{0x8086, 0x4385, B_S,    NT,  "Intel", "Z590",				enable_flash_pch500},
+	{0x8086, 0x4386, B_S,    NT,  "Intel", "H570",				enable_flash_pch500},
+	{0x8086, 0x4387, B_S,    NT,  "Intel", "B560",				enable_flash_pch500},
+	{0x8086, 0x4388, B_S,    NT,  "Intel", "H510",				enable_flash_pch500},
+	{0x8086, 0x438f, B_S,    NT,  "Intel", "W580",				enable_flash_pch500},
+	{0x8086, 0x4389, B_S,    NT,  "Intel", "WM590",				enable_flash_pch500},
+	{0x8086, 0x438a, B_S,    NT,  "Intel", "QM580",				enable_flash_pch500},
+	{0x8086, 0x438b, B_S,    DEP, "Intel", "HM570",				enable_flash_pch500},
+	{0x8086, 0x54a4, B_S,    DEP, "Intel", "Alder Lake-N",			enable_flash_pch600},
+	{0x8086, 0x51a4, B_S,    DEP, "Intel", "Alder Lake-P",			enable_flash_pch600},
+	{0x8086, 0x7a87, B_S,    NT,  "Intel", "H610",				enable_flash_pch600},
+	{0x8086, 0x7a86, B_S,    NT,  "Intel", "B660",				enable_flash_pch600},
+	{0x8086, 0x7a85, B_S,    NT,  "Intel", "H670",				enable_flash_pch600},
+	{0x8086, 0x7a83, B_S,    NT,  "Intel", "Q670",				enable_flash_pch600},
+	{0x8086, 0x7a84, B_S,    DEP, "Intel", "Z690",				enable_flash_pch600},
+	{0x8086, 0x7a88, B_S,    NT,  "Intel", "W680",				enable_flash_pch600},
+	{0x8086, 0x7a8a, B_S,    NT,  "Intel", "W685",				enable_flash_pch600},
+	{0x8086, 0x7a8d, B_S,    NT,  "Intel", "WM690",				enable_flash_pch600},
+	{0x8086, 0x7a8c, B_S,    NT,  "Intel", "HM670",				enable_flash_pch600},
+	{0x8086, 0x7e23, B_S,    DEP, "Intel", "Meteor Lake-P/M",		enable_flash_mtl},
 #endif
 	{0},
 };
@@ -2089,7 +2190,7 @@ int chipset_flash_enable(void)
 
 	/* Now let's try to find the chipset we have... */
 	for (i = 0; chipset_enables[i].vendor_name != NULL; i++) {
-		dev = pci_dev_find(chipset_enables[i].vendor_id,
+		dev = pcidev_find(chipset_enables[i].vendor_id,
 				   chipset_enables[i].device_id);
 		if (!dev)
 			continue;

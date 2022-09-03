@@ -15,11 +15,10 @@
 
 #include <include/test.h>
 
+#include "tests.h"
 #include "flash.h"
 
 #include <stdint.h>
-#include <stdlib.h>
-
 
 void address_to_bits_test_success(void **state)
 {

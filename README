@@ -39,13 +39,17 @@ page.
 it with bzip2.
 
 The snapshot tarballs are the result of 'make tarball' and require no
-further processing.
+further processing. Some git files (for example the rust bindings) are omitted
+from the tarball, as controlled by the .gitattributes files.
 
 
 Build Instructions
 ------------------
 
 To build flashrom you need to install the following software:
+
+ * C compiler (GCC / clang)
+ * pkg-config
 
  * pciutils+libpci (if you want support for mainboard or PCI device flashing)
  * libusb (if you want FT2232, Dediprog or USB-Blaster support)
@@ -161,6 +165,12 @@ If you are using clang and if you want to enable only one driver, you may hit an
 overzealous compiler warning from clang. Compile with "make WARNERROR=no" to
 force it to continue and enjoy.
 
+Bindings:
+
+ Foreign function interface bindings for the rust language are included in the
+ bindings folder. These are not compiled as part of the normal build process.
+ See the readme under bindings/rust for more information.
+
 Installation
 ------------
 
@@ -183,10 +193,6 @@ The official flashrom website is:
 
   http://www.flashrom.org/
 
-The IRC channel is
+Available contact methods are
 
-  #flashrom at irc.freenode.net
-
-The mailing list address is
-
-  flashrom@flashrom.org
+  https://www.flashrom.org/Contact

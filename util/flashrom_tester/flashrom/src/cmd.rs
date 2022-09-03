@@ -33,9 +33,39 @@
 // Software Foundation.
 //
 
-use crate::{FlashChip, FlashromError, FlashromOpt};
+use crate::{FlashChip, FlashromError, ROMWriteSpecifics};
 
 use std::process::Command;
+
+#[derive(Default)]
+pub struct FlashromOpt<'a> {
+    pub wp_opt: WPOpt,
+    pub io_opt: IOOpt<'a>,
+
+    pub layout: Option<&'a str>, // -l <file>
+    pub image: Option<&'a str>,  // -i <name>
+
+    pub flash_name: bool, // --flash-name
+    pub verbose: bool,    // -V
+}
+
+#[derive(Default)]
+pub struct WPOpt {
+    pub range: Option<(i64, i64)>, // --wp-range x0 x1
+    pub status: bool,              // --wp-status
+    pub list: bool,                // --wp-list
+    pub enable: bool,              // --wp-enable
+    pub disable: bool,             // --wp-disable
+}
+
+#[derive(Default)]
+pub struct IOOpt<'a> {
+    pub read: Option<&'a str>,              // -r <file>
+    pub write: Option<&'a str>,             // -w <file>
+    pub verify: Option<&'a str>,            // -v <file>
+    pub erase: bool,                        // -E
+    pub region: Option<(&'a str, &'a str)>, // --image
+}
 
 #[derive(PartialEq, Debug)]
 pub struct FlashromCmd {
@@ -56,26 +86,214 @@ fn flashrom_extract_size(stdout: &str) -> Result<i64, FlashromError> {
     {
         None => return Err("Found no purely-numeric lines in flashrom output".into()),
         Some(Err(e)) => {
-            return Err(format!(
-                "Failed to parse flashrom size output as integer: {}",
-                e
-            ))
+            return Err(format!("Failed to parse flashrom size output as integer: {}", e).into())
         }
         Some(Ok(sz)) => Ok(sz),
     }
 }
 
+impl FlashromCmd {
+    fn dispatch(
+        &self,
+        fropt: FlashromOpt,
+        debug_name: &str,
+    ) -> Result<(String, String), FlashromError> {
+        let params = flashrom_decode_opts(fropt);
+        flashrom_dispatch(self.path.as_str(), &params, self.fc, debug_name)
+    }
+}
+
 impl crate::Flashrom for FlashromCmd {
     fn get_size(&self) -> Result<i64, FlashromError> {
-        let (stdout, _) = flashrom_dispatch(self.path.as_str(), &["--flash-size"], self.fc)?;
-        let sz = String::from_utf8_lossy(&stdout);
-
-        flashrom_extract_size(&sz)
+        let (stdout, _) =
+            flashrom_dispatch(self.path.as_str(), &["--flash-size"], self.fc, "get_size")?;
+        flashrom_extract_size(&stdout)
     }
 
-    fn dispatch(&self, fropt: FlashromOpt) -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
-        let params = flashrom_decode_opts(fropt);
-        flashrom_dispatch(self.path.as_str(), &params, self.fc)
+    fn name(&self) -> Result<(String, String), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                ..Default::default()
+            },
+
+            flash_name: true,
+
+            ..Default::default()
+        };
+
+        let (stdout, _) = self.dispatch(opts, "name")?;
+        match extract_flash_name(&stdout) {
+            None => Err("Didn't find chip vendor/name in flashrom output".into()),
+            Some((vendor, name)) => Ok((vendor.into(), name.into())),
+        }
+    }
+
+    fn write_file_with_layout(&self, rws: &ROMWriteSpecifics) -> Result<bool, FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                write: rws.write_file,
+                ..Default::default()
+            },
+
+            layout: rws.layout_file,
+            image: rws.name_file,
+
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "write_file_with_layout")?;
+        Ok(true)
+    }
+
+    fn wp_range(&self, range: (i64, i64), wp_enable: bool) -> Result<bool, FlashromError> {
+        let opts = FlashromOpt {
+            wp_opt: WPOpt {
+                range: Some(range),
+                enable: wp_enable,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "wp_range")?;
+        Ok(true)
+    }
+
+    fn wp_list(&self) -> Result<String, FlashromError> {
+        let opts = FlashromOpt {
+            wp_opt: WPOpt {
+                list: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (stdout, _) = self.dispatch(opts, "wp_list")?;
+        if stdout.len() == 0 {
+            return Err(
+                "wp_list isn't supported on platforms using the Linux kernel SPI driver wp_list"
+                    .into(),
+            );
+        }
+        Ok(stdout)
+    }
+
+    fn wp_status(&self, en: bool) -> Result<bool, FlashromError> {
+        let status = if en { "en" } else { "dis" };
+        info!("See if chip write protect is {}abled", status);
+
+        let opts = FlashromOpt {
+            wp_opt: WPOpt {
+                status: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (stdout, _) = self.dispatch(opts, "wp_status")?;
+        let s = std::format!("write protect is {}abled", status);
+        Ok(stdout.contains(&s))
+    }
+
+    fn wp_toggle(&self, en: bool) -> Result<bool, FlashromError> {
+        let status = if en { "en" } else { "dis" };
+
+        // For MTD, --wp-range and --wp-enable must be used simultaneously.
+        let range = if en {
+            let rom_sz: i64 = self.get_size()?;
+            Some((0, rom_sz)) // (start, len)
+        } else {
+            None
+        };
+
+        let opts = FlashromOpt {
+            wp_opt: WPOpt {
+                range: range,
+                enable: en,
+                disable: !en,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "wp_toggle")?;
+
+        match self.wp_status(true) {
+            Ok(_ret) => {
+                info!("Successfully {}abled write-protect", status);
+                Ok(true)
+            }
+            Err(e) => Err(format!("Cannot {}able write-protect: {}", status, e).into()),
+        }
+    }
+
+    fn read_into_file(&self, path: &str) -> Result<(), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                read: Some(path),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "read_into_file")?;
+        Ok(())
+    }
+
+    fn read_region_into_file(&self, path: &str, region: &str) -> Result<(), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                region: Some((region, path)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (stdout, _) = self.dispatch(opts, "read_region_into_file")?;
+        Ok(())
+    }
+
+    fn write_from_file(&self, path: &str) -> Result<(), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                write: Some(path),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "write_from_file")?;
+        Ok(())
+    }
+
+    fn verify_from_file(&self, path: &str) -> Result<(), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                verify: Some(path),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "verify_from_file")?;
+        Ok(())
+    }
+
+    fn erase(&self) -> Result<(), FlashromError> {
+        let opts = FlashromOpt {
+            io_opt: IOOpt {
+                erase: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        self.dispatch(opts, "erase")?;
+        Ok(())
+    }
+
+    fn can_control_hw_wp(&self) -> bool {
+        self.fc.can_control_hw_wp()
     }
 }
 
@@ -90,8 +308,7 @@ fn flashrom_decode_opts(opts: FlashromOpt) -> Vec<String> {
     if opts.wp_opt.range.is_some() {
         let (x0, x1) = opts.wp_opt.range.unwrap();
         params.push("--wp-range".to_string());
-        params.push(hex_string(x0));
-        params.push(hex_string(x1));
+        params.push(hex_range_string(x0, x1));
     }
     if opts.wp_opt.status {
         params.push("--wp-status".to_string());
@@ -104,7 +321,11 @@ fn flashrom_decode_opts(opts: FlashromOpt) -> Vec<String> {
     }
 
     // io_opt
-    if opts.io_opt.read.is_some() {
+    if let Some((region, path)) = opts.io_opt.region {
+        params.push("--image".to_string());
+        params.push(format!("{}:{}", region, path));
+        params.push("-r".to_string());
+    } else if opts.io_opt.read.is_some() {
         params.push("-r".to_string());
         params.push(opts.io_opt.read.unwrap().to_string());
     } else if opts.io_opt.write.is_some() {
@@ -130,9 +351,6 @@ fn flashrom_decode_opts(opts: FlashromOpt) -> Vec<String> {
     if opts.flash_name {
         params.push("--flash-name".to_string());
     }
-    if opts.ignore_fmap {
-        params.push("--ignore-fmap".to_string());
-    }
     if opts.verbose {
         params.push("-V".to_string());
     }
@@ -144,7 +362,8 @@ fn flashrom_dispatch<S: AsRef<str>>(
     path: &str,
     params: &[S],
     fc: FlashChip,
-) -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
+    debug_name: &str,
+) -> Result<(String, String), FlashromError> {
     // from man page:
     //  ' -p, --programmer <name>[:parameter[,parameter[,parameter]]] '
     let mut args: Vec<&str> = vec!["-p", FlashChip::to(fc)];
@@ -154,25 +373,27 @@ fn flashrom_dispatch<S: AsRef<str>>(
 
     let output = match Command::new(path).args(&args).output() {
         Ok(x) => x,
-        Err(e) => return Err(format!("Failed to run flashrom: {}", e)),
+        Err(e) => return Err(format!("Failed to run flashrom: {}", e).into()),
     };
+
+    let stdout = String::from_utf8_lossy(output.stdout.as_slice());
+    let stderr = String::from_utf8_lossy(output.stderr.as_slice());
+    debug!("{}()'stdout: {}.", debug_name, stdout);
+    debug!("{}()'stderr: {}.", debug_name, stderr);
+
     if !output.status.success() {
         // There is two cases on failure;
         //  i. ) A bad exit code,
         //  ii.) A SIG killed us.
         match output.status.code() {
             Some(code) => {
-                return Err(format!(
-                    "{}\nExited with error code: {}",
-                    String::from_utf8_lossy(&output.stderr),
-                    code
-                ));
+                return Err(format!("{}\nExited with error code: {}", stderr, code).into());
             }
             None => return Err("Process terminated by a signal".into()),
         }
     }
 
-    Ok((output.stdout, output.stderr))
+    Ok((stdout.into(), stderr.into()))
 }
 
 pub fn dut_ctrl_toggle_wp(en: bool) -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
@@ -192,7 +413,7 @@ pub fn dut_ctrl_servo_type() -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
 fn dut_ctrl(args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
     let output = match Command::new("dut-control").args(args).output() {
         Ok(x) => x,
-        Err(e) => return Err(format!("Failed to run dut-control: {}", e)),
+        Err(e) => return Err(format!("Failed to run dut-control: {}", e).into()),
     };
     if !output.status.success() {
         // There is two cases on failure;
@@ -209,14 +430,37 @@ fn dut_ctrl(args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), FlashromError> {
     Ok((output.stdout, output.stderr))
 }
 
-fn hex_string(v: i64) -> String {
-    format!("{:#08X}", v).to_string()
+fn hex_range_string(s: i64, l: i64) -> String {
+    format!("{:#08X},{:#08X}", s, l).to_string()
+}
+
+/// Get a flash vendor and name from the first matching line of flashrom output.
+///
+/// The target line looks like 'vendor="foo" name="bar"', as output by flashrom --flash-name.
+/// This is usually the last line of output.
+fn extract_flash_name(stdout: &str) -> Option<(&str, &str)> {
+    for line in stdout.lines() {
+        if !line.starts_with("vendor=\"") {
+            continue;
+        }
+
+        let tail = line.trim_start_matches("vendor=\"");
+        let mut split = tail.splitn(2, "\" name=\"");
+        let vendor = split.next();
+        let name = split.next().map(|s| s.trim_end_matches('"'));
+
+        match (vendor, name) {
+            (Some(v), Some(n)) => return Some((v, n)),
+            _ => continue,
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::flashrom_decode_opts;
-    use crate::{FlashromOpt, IOOpt, WPOpt};
+    use super::{FlashromOpt, IOOpt, WPOpt};
 
     #[test]
     fn decode_wp_opt() {
@@ -237,7 +481,7 @@ mod tests {
                 status: true,
                 ..Default::default()
             },
-            &["--wp-range", "0x000000", "0x0004D2", "--wp-status"],
+            &["--wp-range", "0x000000,0x0004D2", "--wp-status"],
         );
         test_wp_opt(
             WPOpt {
@@ -326,11 +570,10 @@ mod tests {
         assert_eq!(
             flashrom_decode_opts(FlashromOpt {
                 flash_name: true,
-                ignore_fmap: true,
                 verbose: true,
                 ..Default::default()
             }),
-            &["--flash-name", "--ignore-fmap", "-V"]
+            &["--flash-name", "-V"]
         );
     }
 
@@ -351,5 +594,27 @@ mod tests {
             flashrom_extract_size("There was a catastrophic error."),
             Err("Found no purely-numeric lines in flashrom output".into())
         );
+    }
+
+    #[test]
+    fn extract_flash_name() {
+        use super::extract_flash_name;
+
+        assert_eq!(
+            extract_flash_name(
+                "coreboot table found at 0x7cc13000\n\
+                 Found chipset \"Intel Braswell\". Enabling flash write... OK.\n\
+                 vendor=\"Winbond\" name=\"W25Q64DW\"\n"
+            ),
+            Some(("Winbond", "W25Q64DW"))
+        );
+
+        assert_eq!(
+            extract_flash_name(
+                "vendor name is TEST\n\
+                 Something failed!"
+            ),
+            None
+        )
     }
 }

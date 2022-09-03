@@ -83,7 +83,7 @@ static unsigned int stored_delay_us = 0;
 
 static struct libusb_device_handle *handle = NULL;
 
-const struct dev_entry devs_ch341a_spi[] = {
+static const struct dev_entry devs_ch341a_spi[] = {
 	{0x1A86, 0x5512, OK, "Winchiphead (WCH)", "CH341A"},
 
 	{0},
@@ -322,7 +322,7 @@ static void pluck_cs(uint8_t *ptr)
 	*ptr++ = CH341A_CMD_UIO_STM_END;
 }
 
-void ch341a_spi_delay(unsigned int usecs)
+static void ch341a_spi_delay(unsigned int usecs)
 {
 	/* There is space for 28 bytes instructions of 750 ns each in the CS packet (32 - 4 for the actual CS
 	 * instructions), thus max 21 us, but we avoid getting too near to this boundary and use
@@ -384,20 +384,6 @@ static int ch341a_spi_spi_send_command(const struct flashctx *flash, unsigned in
 	return 0;
 }
 
-static const struct spi_master spi_master_ch341a_spi = {
-	.features	= SPI_MASTER_4BA,
-	/* flashrom's current maximum is 256 B. CH341A was tested on Linux and Windows to accept atleast
-	 * 128 kB. Basically there should be no hard limit because transfers are broken up into USB packets
-	 * sent to the device and most of their payload streamed via SPI. */
-	.max_data_read	= 4 * 1024,
-	.max_data_write	= 4 * 1024,
-	.command	= ch341a_spi_spi_send_command,
-	.multicommand	= default_spi_send_multicommand,
-	.read		= default_spi_read,
-	.write_256	= default_spi_write_256,
-	.write_aai	= default_spi_write_aai,
-};
-
 static int ch341a_spi_shutdown(void *data)
 {
 	if (handle == NULL)
@@ -418,7 +404,23 @@ static int ch341a_spi_shutdown(void *data)
 	return 0;
 }
 
-int ch341a_spi_init(void)
+static const struct spi_master spi_master_ch341a_spi = {
+	.features	= SPI_MASTER_4BA,
+	/* flashrom's current maximum is 256 B. CH341A was tested on Linux and Windows to accept at least
+	 * 128 kB. Basically there should be no hard limit because transfers are broken up into USB packets
+	 * sent to the device and most of their payload streamed via SPI. */
+	.max_data_read	= 4 * 1024,
+	.max_data_write	= 4 * 1024,
+	.command	= ch341a_spi_spi_send_command,
+	.multicommand	= default_spi_send_multicommand,
+	.read		= default_spi_read,
+	.write_256	= default_spi_write_256,
+	.write_aai	= default_spi_write_aai,
+	.shutdown	= ch341a_spi_shutdown,
+	.probe_opcode	= default_spi_probe_opcode,
+};
+
+static int ch341a_spi_init(void)
 {
 	if (handle != NULL) {
 		msg_cerr("%s: handle already set! Please report a bug at flashrom@flashrom.org\n", __func__);
@@ -427,7 +429,7 @@ int ch341a_spi_init(void)
 
 	int32_t ret = libusb_init(NULL);
 	if (ret < 0) {
-		msg_perr("Couldnt initialize libusb!\n");
+		msg_perr("Couldn't initialize libusb!\n");
 		return -1;
 	}
 
@@ -446,17 +448,11 @@ int ch341a_spi_init(void)
 		return -1;
 	}
 
-/* libusb_detach_kernel_driver() and friends basically only work on Linux. We simply try to detach on Linux
- * without a lot of passion here. If that works fine else we will fail on claiming the interface anyway. */
-#if IS_LINUX
-	ret = libusb_detach_kernel_driver(handle, 0);
-	if (ret == LIBUSB_ERROR_NOT_SUPPORTED) {
-		msg_pwarn("Detaching kernel drivers is not supported. Further accesses may fail.\n");
-	} else if (ret != 0 && ret != LIBUSB_ERROR_NOT_FOUND) {
-		msg_pwarn("Failed to detach kernel driver: '%s'. Further accesses will probably fail.\n",
-			  libusb_error_name(ret));
+	ret = libusb_set_auto_detach_kernel_driver(handle, 1);
+	if (ret != 0) {
+		msg_pwarn("Platform does not support detaching of USB kernel drivers.\n"
+			  "If an unsupported driver is active, claiming the interface may fail.\n");
 	}
-#endif
 
 	ret = libusb_claim_interface(handle, 0);
 	if (ret != 0) {
@@ -504,10 +500,7 @@ int ch341a_spi_init(void)
 	if ((config_stream(CH341A_STM_I2C_100K) < 0) || (enable_pins(true) < 0))
 		goto dealloc_transfers;
 
-	register_shutdown(ch341a_spi_shutdown, NULL);
-	register_spi_master(&spi_master_ch341a_spi);
-
-	return 0;
+	return register_spi_master(&spi_master_ch341a_spi, NULL);
 
 dealloc_transfers:
 	for (i = 0; i < USB_IN_TRANSFERS; i++) {
@@ -525,3 +518,13 @@ close_handle:
 	handle = NULL;
 	return -1;
 }
+
+const struct programmer_entry programmer_ch341a_spi = {
+	.name			= "ch341a_spi",
+	.type			= USB,
+	.devs.dev		= devs_ch341a_spi,
+	.init			= ch341a_spi_init,
+	.map_flash_region	= fallback_map,
+	.unmap_flash_region	= fallback_unmap,
+	.delay			= ch341a_spi_delay,
+};

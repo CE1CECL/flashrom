@@ -15,12 +15,11 @@
  * GNU General Public License for more details.
  */
 
-#if defined(__i386__) || defined(__x86_64__)
-
 #include "flash.h"
 #include "programmer.h"
-#include "hwaccess.h"
+#include "hwaccess_x86_io.h"
 #include "spi.h"
+#include "platform/pci.h"
 
 /* same as serverengines */
 static void enter_conf_mode_ec(uint16_t port)
@@ -151,5 +150,3 @@ int amd_imc_shutdown(struct pci_dev *dev)
 
 	return ret;
 }
-
-#endif

@@ -19,13 +19,11 @@
  * GNU General Public License for more details.
  */
 
-#if defined(__i386__) || defined(__x86_64__)
-
 #include <string.h>
 #include <stdlib.h>
 #include "flash.h"
 #include "programmer.h"
-#include "hwaccess.h"
+#include "hwaccess_physmap.h"
 #include "spi.h"
 #include "ich_descriptors.h"
 
@@ -48,11 +46,22 @@
  */
 
 /* Changed HSFC Control bits */
+/*
+ * 4 bits to represents the FCYCLE operation for PCH as:
+ * 0: SPI Read
+ * 2: SPI Write
+ * 3: SPI Erase 4K
+ * 4: SPI Erase 64K
+ * 6: SPI RDID
+ * 7: SPI Write Status
+ * 8: SPI Read Status
+  */
+#define PCH100_HSFC_FCYCLE_BIT_WIDTH	0xf
 #define PCH100_HSFC_FCYCLE_OFF	(17 - 16)	/* 1-4: FLASH Cycle */
-#define PCH100_HSFC_FCYCLE	(0xf << PCH100_HSFC_FCYCLE_OFF)
+#define PCH100_HSFC_FCYCLE	HSFC_FCYCLE_MASK(PCH100_HSFC_FCYCLE_BIT_WIDTH)
 /* New HSFC Control bit */
-#define HSFC_WET_OFF		(21 - 16)	/* 5: Write Enable Type */
-#define HSFC_WET		(0x1 << HSFC_WET_OFF)
+#define PCH100_HSFC_WET_OFF	(21 - 16)	/* 5: Write Enable Type */
+#define PCH100_HSFC_WET		(0x1 << PCH100_HSFC_WET_OFF)
 
 #define PCH100_FADDR_FLA	0x07ffffff
 
@@ -109,11 +118,25 @@
 #define ICH9_REG_HSFC		0x06	/* 16 Bits Hardware Sequencing Flash Control */
 #define HSFC_FGO_OFF		0	/* 0: Flash Cycle Go */
 #define HSFC_FGO		(0x1 << HSFC_FGO_OFF)
+/*
+ * 2 bits to represents the FCYCLE operation for ICH9 as:
+ * 0: SPI Read
+ * 2: SPI Write
+ * 3: SPI Block Erase
+ */
+#define ICH9_HSFC_FCYCLE_BIT_WIDTH	3
 #define HSFC_FCYCLE_OFF		1	/* 1-2: FLASH Cycle */
-#define HSFC_FCYCLE		(0x3 << HSFC_FCYCLE_OFF)
+#define HSFC_FCYCLE_MASK(n)	((n) << HSFC_FCYCLE_OFF)
+#define HSFC_FCYCLE		HSFC_FCYCLE_MASK(ICH9_HSFC_FCYCLE_BIT_WIDTH)
+#define HSFC_CYCLE_READ		HSFC_FCYCLE_MASK(0)
+#define HSFC_CYCLE_WRITE	HSFC_FCYCLE_MASK(2)
+#define HSFC_CYCLE_BLOCK_ERASE	HSFC_FCYCLE_MASK(3)
+#define HSFC_CYCLE_WR_STATUS	HSFC_FCYCLE_MASK(7)
+#define HSFC_CYCLE_RD_STATUS	HSFC_FCYCLE_MASK(8)
 					/* 3-7: reserved */
 #define HSFC_FDBC_OFF		8	/* 8-13: Flash Data Byte Count */
 #define HSFC_FDBC		(0x3f << HSFC_FDBC_OFF)
+#define HSFC_FDBC_VAL(n)	(((n) << HSFC_FDBC_OFF) & HSFC_FDBC)
 					/* 14: reserved */
 #define HSFC_SME_OFF		15	/* 15: SPI SMI# Enable */
 #define HSFC_SME		(0x1 << HSFC_SME_OFF)
@@ -286,12 +309,40 @@ static uint16_t REGREAD8(int X)
 #define REGWRITE8(off, val)  mmio_writeb(val, ich_spibar+(off))
 
 /* Common SPI functions */
-static int find_opcode(OPCODES *op, uint8_t opcode);
-static int find_preop(OPCODES *op, uint8_t preop);
-static int generate_opcodes(OPCODES * op, enum ich_chipset ich_gen);
-static int program_opcodes(OPCODES *op, int enable_undo, enum ich_chipset ich_gen);
-static int run_opcode(const struct flashctx *flash, OPCODE op, uint32_t offset,
-		      uint8_t datalength, uint8_t * data);
+
+static int find_opcode(OPCODES *op, uint8_t opcode)
+{
+	int a;
+
+	if (op == NULL) {
+		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
+		return -1;
+	}
+
+	for (a = 0; a < 8; a++) {
+		if (op->opcode[a].opcode == opcode)
+			return a;
+	}
+
+	return -1;
+}
+
+static int find_preop(OPCODES *op, uint8_t preop)
+{
+	int a;
+
+	if (op == NULL) {
+		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
+		return -1;
+	}
+
+	for (a = 0; a < 2; a++) {
+		if (op->preop[a] == preop)
+			return a;
+	}
+
+	return -1;
+}
 
 /* for pairing opcodes with their required preop */
 struct preop_opcode_pair {
@@ -386,8 +437,7 @@ static void prettyprint_opcodes(OPCODES *ops)
 		 ops->preop[1]);
 }
 
-#define _pprint_reg(bit, mask, off, val, sep) msg_pdbg("%s=%d" sep, #bit, (val & mask) >> off)
-#define pprint_reg(reg, bit, val, sep) _pprint_reg(bit, reg##_##bit, reg##_##bit##_OFF, val, sep)
+#define pprint_reg(reg, bit, val, sep) msg_pdbg("%s=%d" sep, #bit, (val & reg##_##bit) >> reg##_##bit##_OFF)
 
 static void prettyprint_ich9_reg_hsfs(uint16_t reg_val, enum ich_chipset ich_gen)
 {
@@ -400,6 +450,8 @@ static void prettyprint_ich9_reg_hsfs(uint16_t reg_val, enum ich_chipset ich_gen
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_ELKHART_LAKE:
 		break;
 	default:
 		pprint_reg(HSFS, BERASE, reg_val, ", ");
@@ -411,6 +463,8 @@ static void prettyprint_ich9_reg_hsfs(uint16_t reg_val, enum ich_chipset ich_gen
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_ELKHART_LAKE:
 		pprint_reg(HSFS, PRR34_LOCKDN, reg_val, ", ");
 		pprint_reg(HSFS, WRSDIS, reg_val, ", ");
 		break;
@@ -431,8 +485,10 @@ static void prettyprint_ich9_reg_hsfc(uint16_t reg_val, enum ich_chipset ich_gen
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
-		_pprint_reg(HSFC, PCH100_HSFC_FCYCLE, PCH100_HSFC_FCYCLE_OFF, reg_val, ", ");
-		pprint_reg(HSFC, WET, reg_val, ", ");
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_ELKHART_LAKE:
+		pprint_reg(PCH100_HSFC, FCYCLE, reg_val, ", ");
+		pprint_reg(PCH100_HSFC, WET, reg_val, ", ");
 		break;
 	default:
 		pprint_reg(HSFC, FCYCLE, reg_val, ", ");
@@ -478,7 +534,7 @@ static void prettyprint_pch100_reg_dlock(const uint32_t reg_val)
 	pprint_reg(DLOCK, SSEQ_LOCKDN, reg_val, "\n");
 }
 
-static struct {
+static struct swseq_data {
 	size_t reg_ssfsc;
 	size_t reg_preop;
 	size_t reg_optype;
@@ -495,131 +551,6 @@ static uint8_t lookup_spi_type(uint8_t opcode)
 	}
 
 	return 0xFF;
-}
-
-static int reprogram_opcode_on_the_fly(uint8_t opcode, unsigned int writecnt, unsigned int readcnt)
-{
-	uint8_t spi_type;
-
-	spi_type = lookup_spi_type(opcode);
-	if (spi_type > 3) {
-		/* Try to guess spi type from read/write sizes.
-		 * The following valid writecnt/readcnt combinations exist:
-		 * writecnt  = 4, readcnt >= 0
-		 * writecnt  = 1, readcnt >= 0
-		 * writecnt >= 4, readcnt  = 0
-		 * writecnt >= 1, readcnt  = 0
-		 * writecnt >= 1 is guaranteed for all commands.
-		 */
-		if (readcnt == 0)
-			/* if readcnt=0 and writecount >= 4, we don't know if it is WRITE_NO_ADDRESS
-			 * or WRITE_WITH_ADDRESS. But if we use WRITE_NO_ADDRESS and the first 3 data
-			 * bytes are actual the address, they go to the bus anyhow
-			 */
-			spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
-		else if (writecnt == 1) // and readcnt is > 0
-			spi_type = SPI_OPCODE_TYPE_READ_NO_ADDRESS;
-		else if (writecnt == 4) // and readcnt is > 0
-			spi_type = SPI_OPCODE_TYPE_READ_WITH_ADDRESS;
-		else // we have an invalid case
-			return SPI_INVALID_LENGTH;
-	}
-	int oppos = 2;	// use original JEDEC_BE_D8 offset
-	curopcodes->opcode[oppos].opcode = opcode;
-	curopcodes->opcode[oppos].spi_type = spi_type;
-	program_opcodes(curopcodes, 0, ich_generation);
-	oppos = find_opcode(curopcodes, opcode);
-	msg_pdbg2("on-the-fly OPCODE (0x%02X) re-programmed, op-pos=%d\n", opcode, oppos);
-	return oppos;
-}
-
-static int find_opcode(OPCODES *op, uint8_t opcode)
-{
-	int a;
-
-	if (op == NULL) {
-		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
-		return -1;
-	}
-
-	for (a = 0; a < 8; a++) {
-		if (op->opcode[a].opcode == opcode)
-			return a;
-	}
-
-	return -1;
-}
-
-static int find_preop(OPCODES *op, uint8_t preop)
-{
-	int a;
-
-	if (op == NULL) {
-		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
-		return -1;
-	}
-
-	for (a = 0; a < 2; a++) {
-		if (op->preop[a] == preop)
-			return a;
-	}
-
-	return -1;
-}
-
-/* Create a struct OPCODES based on what we find in the locked down chipset. */
-static int generate_opcodes(OPCODES * op, enum ich_chipset ich_gen)
-{
-	int a;
-	uint16_t preop, optype;
-	uint32_t opmenu[2];
-
-	if (op == NULL) {
-		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
-		return -1;
-	}
-
-	switch (ich_gen) {
-	case CHIPSET_ICH7:
-	case CHIPSET_TUNNEL_CREEK:
-	case CHIPSET_CENTERTON:
-		preop = REGREAD16(ICH7_REG_PREOP);
-		optype = REGREAD16(ICH7_REG_OPTYPE);
-		opmenu[0] = REGREAD32(ICH7_REG_OPMENU);
-		opmenu[1] = REGREAD32(ICH7_REG_OPMENU + 4);
-		break;
-	case CHIPSET_ICH8:
-	default:		/* Future version might behave the same */
-		preop = REGREAD16(swseq_data.reg_preop);
-		optype = REGREAD16(swseq_data.reg_optype);
-		opmenu[0] = REGREAD32(swseq_data.reg_opmenu);
-		opmenu[1] = REGREAD32(swseq_data.reg_opmenu + 4);
-		break;
-	}
-
-	op->preop[0] = (uint8_t) preop;
-	op->preop[1] = (uint8_t) (preop >> 8);
-
-	for (a = 0; a < 8; a++) {
-		op->opcode[a].spi_type = (uint8_t) (optype & 0x3);
-		optype >>= 2;
-	}
-
-	for (a = 0; a < 4; a++) {
-		op->opcode[a].opcode = (uint8_t) (opmenu[0] & 0xff);
-		opmenu[0] >>= 8;
-	}
-
-	for (a = 4; a < 8; a++) {
-		op->opcode[a].opcode = (uint8_t) (opmenu[1] & 0xff);
-		opmenu[1] >>= 8;
-	}
-
-	/* No preopcodes used by default. */
-	for (a = 0; a < 8; a++)
-		op->opcode[a].atomic = 0;
-
-	return 0;
 }
 
 static int program_opcodes(OPCODES *op, int enable_undo, enum ich_chipset ich_gen)
@@ -688,6 +619,42 @@ static int program_opcodes(OPCODES *op, int enable_undo, enum ich_chipset ich_ge
 	return 0;
 }
 
+static int reprogram_opcode_on_the_fly(uint8_t opcode, unsigned int writecnt, unsigned int readcnt)
+{
+	uint8_t spi_type;
+
+	spi_type = lookup_spi_type(opcode);
+	if (spi_type > 3) {
+		/* Try to guess spi type from read/write sizes.
+		 * The following valid writecnt/readcnt combinations exist:
+		 * writecnt  = 4, readcnt >= 0
+		 * writecnt  = 1, readcnt >= 0
+		 * writecnt >= 4, readcnt  = 0
+		 * writecnt >= 1, readcnt  = 0
+		 * writecnt >= 1 is guaranteed for all commands.
+		 */
+		if (readcnt == 0)
+			/* if readcnt=0 and writecount >= 4, we don't know if it is WRITE_NO_ADDRESS
+			 * or WRITE_WITH_ADDRESS. But if we use WRITE_NO_ADDRESS and the first 3 data
+			 * bytes are actual the address, they go to the bus anyhow
+			 */
+			spi_type = SPI_OPCODE_TYPE_WRITE_NO_ADDRESS;
+		else if (writecnt == 1) // and readcnt is > 0
+			spi_type = SPI_OPCODE_TYPE_READ_NO_ADDRESS;
+		else if (writecnt == 4) // and readcnt is > 0
+			spi_type = SPI_OPCODE_TYPE_READ_WITH_ADDRESS;
+		else // we have an invalid case
+			return SPI_INVALID_LENGTH;
+	}
+	int oppos = 2;	// use original JEDEC_BE_D8 offset
+	curopcodes->opcode[oppos].opcode = opcode;
+	curopcodes->opcode[oppos].spi_type = spi_type;
+	program_opcodes(curopcodes, 0, ich_generation);
+	oppos = find_opcode(curopcodes, opcode);
+	msg_pdbg2("on-the-fly OPCODE (0x%02X) re-programmed, op-pos=%d\n", opcode, oppos);
+	return oppos;
+}
+
 /*
  * Returns -1 if at least one mandatory opcode is inaccessible, 0 otherwise.
  * FIXME: this should also check for
@@ -754,49 +721,59 @@ static void ich_set_bbar(uint32_t min_addr, enum ich_chipset ich_gen)
 			 min_addr, ichspi_bbar);
 }
 
-/* Read len bytes from the fdata/spid register into the data array.
- *
- * Note that using len > flash->mst->spi.max_data_read will return garbage or
- * may even crash.
- */
-static void ich_read_data(uint8_t *data, int len, int reg0_off)
+/* Create a struct OPCODES based on what we find in the locked down chipset. */
+static int generate_opcodes(OPCODES * op, enum ich_chipset ich_gen)
 {
-	int i;
-	uint32_t temp32 = 0;
+	int a;
+	uint16_t preop, optype;
+	uint32_t opmenu[2];
 
-	for (i = 0; i < len; i++) {
-		if ((i % 4) == 0)
-			temp32 = REGREAD32(reg0_off + i);
-
-		data[i] = (temp32 >> ((i % 4) * 8)) & 0xff;
+	if (op == NULL) {
+		msg_perr("\n%s: null OPCODES pointer!\n", __func__);
+		return -1;
 	}
-}
 
-/* Fill len bytes from the data array into the fdata/spid registers.
- *
- * Note that using len > flash->mst->spi.max_data_write will trash the registers
- * following the data registers.
- */
-static void ich_fill_data(const uint8_t *data, int len, int reg0_off)
-{
-	uint32_t temp32 = 0;
-	int i;
-
-	if (len <= 0)
-		return;
-
-	for (i = 0; i < len; i++) {
-		if ((i % 4) == 0)
-			temp32 = 0;
-
-		temp32 |= ((uint32_t) data[i]) << ((i % 4) * 8);
-
-		if ((i % 4) == 3) /* 32 bits are full, write them to regs. */
-			REGWRITE32(reg0_off + (i - (i % 4)), temp32);
+	switch (ich_gen) {
+	case CHIPSET_ICH7:
+	case CHIPSET_TUNNEL_CREEK:
+	case CHIPSET_CENTERTON:
+		preop = REGREAD16(ICH7_REG_PREOP);
+		optype = REGREAD16(ICH7_REG_OPTYPE);
+		opmenu[0] = REGREAD32(ICH7_REG_OPMENU);
+		opmenu[1] = REGREAD32(ICH7_REG_OPMENU + 4);
+		break;
+	case CHIPSET_ICH8:
+	default:		/* Future version might behave the same */
+		preop = REGREAD16(swseq_data.reg_preop);
+		optype = REGREAD16(swseq_data.reg_optype);
+		opmenu[0] = REGREAD32(swseq_data.reg_opmenu);
+		opmenu[1] = REGREAD32(swseq_data.reg_opmenu + 4);
+		break;
 	}
-	i--;
-	if ((i % 4) != 3) /* Write remaining data to regs. */
-		REGWRITE32(reg0_off + (i - (i % 4)), temp32);
+
+	op->preop[0] = (uint8_t) preop;
+	op->preop[1] = (uint8_t) (preop >> 8);
+
+	for (a = 0; a < 8; a++) {
+		op->opcode[a].spi_type = (uint8_t) (optype & 0x3);
+		optype >>= 2;
+	}
+
+	for (a = 0; a < 4; a++) {
+		op->opcode[a].opcode = (uint8_t) (opmenu[0] & 0xff);
+		opmenu[0] >>= 8;
+	}
+
+	for (a = 4; a < 8; a++) {
+		op->opcode[a].opcode = (uint8_t) (opmenu[1] & 0xff);
+		opmenu[1] >>= 8;
+	}
+
+	/* No preopcodes used by default. */
+	for (a = 0; a < 8; a++)
+		op->opcode[a].atomic = 0;
+
+	return 0;
 }
 
 /* This function generates OPCODES from or programs OPCODES to ICH according to
@@ -831,6 +808,51 @@ static int ich_init_opcodes(enum ich_chipset ich_gen)
 		msg_pdbg("done\n");
 		prettyprint_opcodes(curopcodes);
 		return 0;
+	}
+}
+
+/* Fill len bytes from the data array into the fdata/spid registers.
+ *
+ * Note that using len > flash->mst->spi.max_data_write will trash the registers
+ * following the data registers.
+ */
+static void ich_fill_data(const uint8_t *data, int len, int reg0_off)
+{
+	uint32_t temp32 = 0;
+	int i;
+
+	if (len <= 0)
+		return;
+
+	for (i = 0; i < len; i++) {
+		if ((i % 4) == 0)
+			temp32 = 0;
+
+		temp32 |= ((uint32_t) data[i]) << ((i % 4) * 8);
+
+		if ((i % 4) == 3) /* 32 bits are full, write them to regs. */
+			REGWRITE32(reg0_off + (i - (i % 4)), temp32);
+	}
+	i--;
+	if ((i % 4) != 3) /* Write remaining data to regs. */
+		REGWRITE32(reg0_off + (i - (i % 4)), temp32);
+}
+
+/* Read len bytes from the fdata/spid register into the data array.
+ *
+ * Note that using len > flash->mst->spi.max_data_read will return garbage or
+ * may even crash.
+ */
+static void ich_read_data(uint8_t *data, int len, int reg0_off)
+{
+	int i;
+	uint32_t temp32 = 0;
+
+	for (i = 0; i < len; i++) {
+		if ((i % 4) == 0)
+			temp32 = REGREAD32(reg0_off + i);
+
+		data[i] = (temp32 >> ((i % 4) * 8)) & 0xff;
 	}
 }
 
@@ -931,8 +953,7 @@ static int ich7_run_opcode(OPCODE op, uint32_t offset,
 		programmer_delay(10);
 	}
 	if (!timeout) {
-		msg_perr("timeout, ICH7_REG_SPIS=0x%04x\n",
-			 REGREAD16(ICH7_REG_SPIS));
+		msg_perr("timeout, ICH7_REG_SPIS=0x%04x\n", REGREAD16(ICH7_REG_SPIS));
 		return 1;
 	}
 
@@ -977,7 +998,7 @@ static int ich9_run_opcode(OPCODE op, uint32_t offset,
 	}
 
 	/* Program offset in flash into FADDR while preserve the reserved bits
-	 * and clearing the 25. address bit which is only useable in hwseq. */
+	 * and clearing the 25. address bit which is only usable in hwseq. */
 	temp32 = REGREAD32(ICH9_REG_FADDR) & ~0x01FFFFFF;
 	REGWRITE32(ICH9_REG_FADDR, (offset & 0x00FFFFFF) | temp32);
 
@@ -1000,8 +1021,7 @@ static int ich9_run_opcode(OPCODE op, uint32_t offset,
 	if (datalength != 0) {
 		uint32_t datatemp;
 		temp32 |= SSFC_DS;
-		datatemp = ((((uint32_t)datalength - 1) << SSFC_DBC_OFF) &
-			    SSFC_DBC);
+		datatemp = ((((uint32_t)datalength - 1) << SSFC_DBC_OFF) & SSFC_DBC);
 		temp32 |= datatemp;
 	}
 
@@ -1053,8 +1073,7 @@ static int ich9_run_opcode(OPCODE op, uint32_t offset,
 		programmer_delay(10);
 	}
 	if (!timeout) {
-		msg_perr("timeout, REG_SSFS=0x%08x\n",
-			 REGREAD32(swseq_data.reg_ssfsc));
+		msg_perr("timeout, REG_SSFS=0x%08x\n", REGREAD32(swseq_data.reg_ssfsc));
 		return 1;
 	}
 
@@ -1128,8 +1147,7 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 			msg_pdbg("OPCODE 0x%02x has unsupported length, will not execute.\n", cmd);
 			return SPI_INVALID_LENGTH;
 		} else if (opcode_index == -1) {
-			msg_pdbg("Invalid OPCODE 0x%02x, will not execute.\n",
-				 cmd);
+			msg_pdbg("Invalid OPCODE 0x%02x, will not execute.\n", cmd);
 			return SPI_INVALID_OPCODE;
 		}
 	}
@@ -1146,30 +1164,26 @@ static int ich_spi_send_command(const struct flashctx *flash, unsigned int write
 	if ((opcode->spi_type == SPI_OPCODE_TYPE_READ_WITH_ADDRESS) &&
 	    (writecnt != 4)) {
 		msg_perr("%s: Internal command size error for opcode "
-			"0x%02x, got writecnt=%i, want =4\n", __func__, cmd,
-			writecnt);
+			"0x%02x, got writecnt=%i, want =4\n", __func__, cmd, writecnt);
 		return SPI_INVALID_LENGTH;
 	}
 	if ((opcode->spi_type == SPI_OPCODE_TYPE_READ_NO_ADDRESS) &&
 	    (writecnt != 1)) {
 		msg_perr("%s: Internal command size error for opcode "
-			"0x%02x, got writecnt=%i, want =1\n", __func__, cmd,
-			writecnt);
+			"0x%02x, got writecnt=%i, want =1\n", __func__, cmd, writecnt);
 		return SPI_INVALID_LENGTH;
 	}
 	if ((opcode->spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS) &&
 	    (writecnt < 4)) {
 		msg_perr("%s: Internal command size error for opcode "
-			"0x%02x, got writecnt=%i, want >=4\n", __func__, cmd,
-			writecnt);
+			"0x%02x, got writecnt=%i, want >=4\n", __func__, cmd, writecnt);
 		return SPI_INVALID_LENGTH;
 	}
 	if (((opcode->spi_type == SPI_OPCODE_TYPE_WRITE_WITH_ADDRESS) ||
 	     (opcode->spi_type == SPI_OPCODE_TYPE_WRITE_NO_ADDRESS)) &&
 	    (readcnt)) {
 		msg_perr("%s: Internal command size error for opcode "
-			"0x%02x, got readcnt=%i, want =0\n", __func__, cmd,
-			readcnt);
+			"0x%02x, got readcnt=%i, want =0\n", __func__, cmd, readcnt);
 		return SPI_INVALID_LENGTH;
 	}
 
@@ -1246,13 +1260,18 @@ static struct hwseq_data {
 	uint32_t addr_mask;
 	bool only_4k;
 	uint32_t hsfc_fcycle;
-} hwseq_data;
+} g_hwseq_data;
+
+static struct hwseq_data *get_hwseq_data_from_context(const struct flashctx *flash)
+{
+	return flash->mst->opaque.data;
+}
 
 /* Sets FLA in FADDR to (addr & hwseq_data.addr_mask) without touching other bits. */
-static void ich_hwseq_set_addr(uint32_t addr)
+static void ich_hwseq_set_addr(uint32_t addr, uint32_t mask)
 {
-	uint32_t addr_old = REGREAD32(ICH9_REG_FADDR) & ~hwseq_data.addr_mask;
-	REGWRITE32(ICH9_REG_FADDR, (addr & hwseq_data.addr_mask) | addr_old);
+	uint32_t addr_old = REGREAD32(ICH9_REG_FADDR) & ~mask;
+	REGWRITE32(ICH9_REG_FADDR, (addr & mask) | addr_old);
 }
 
 /* Sets FADDR.FLA to 'addr' and returns the erase block size in bytes
@@ -1262,7 +1281,7 @@ static void ich_hwseq_set_addr(uint32_t addr)
  * by UVSCC and LVSCC respectively. An alternative to implement this method
  * would be by querying FPB and the respective VSCC register directly.
  */
-static uint32_t ich_hwseq_get_erase_block_size(unsigned int addr)
+static uint32_t ich_hwseq_get_erase_block_size(unsigned int addr, uint32_t addr_mask, bool only_4k)
 {
 	uint8_t enc_berase;
 	static const uint32_t dec_berase[4] = {
@@ -1272,11 +1291,11 @@ static uint32_t ich_hwseq_get_erase_block_size(unsigned int addr)
 		64 * 1024
 	};
 
-	if (hwseq_data.only_4k) {
+	if (only_4k) {
 		return 4 * 1024;
 	}
 
-	ich_hwseq_set_addr(addr);
+	ich_hwseq_set_addr(addr, addr_mask);
 	enc_berase = (REGREAD16(ICH9_REG_HSFS) & HSFS_BERASE) >> HSFS_BERASE_OFF;
 	return dec_berase[enc_berase];
 }
@@ -1285,22 +1304,25 @@ static uint32_t ich_hwseq_get_erase_block_size(unsigned int addr)
    Resets all error flags in HSFS.
    Returns 0 if the cycle completes successfully without errors within
    timeout us, 1 on errors. */
-static int ich_hwseq_wait_for_cycle_complete(unsigned int timeout,
-					     unsigned int len,
-					     enum ich_chipset ich_gen)
+static int ich_hwseq_wait_for_cycle_complete(unsigned int len, enum ich_chipset ich_gen, uint32_t addr_mask)
 {
+	/*
+	 * The SPI bus may be busy due to performing operations from other masters, hence
+	 * introduce the long timeout of 30s to cover the worst case scenarios as well.
+	 */
+	unsigned int timeout_us = 30 * 1000 * 1000;
 	uint16_t hsfs;
 	uint32_t addr;
 
-	timeout /= 8; /* scale timeout duration to counter */
+	timeout_us /= 8; /* scale timeout duration to counter */
 	while ((((hsfs = REGREAD16(ICH9_REG_HSFS)) &
 		 (HSFS_FDONE | HSFS_FCERR)) == 0) &&
-	       --timeout) {
+	       --timeout_us) {
 		programmer_delay(8);
 	}
 	REGWRITE16(ICH9_REG_HSFS, REGREAD16(ICH9_REG_HSFS));
-	if (!timeout) {
-		addr = REGREAD32(ICH9_REG_FADDR) & hwseq_data.addr_mask;
+	if (!timeout_us) {
+		addr = REGREAD32(ICH9_REG_FADDR) & addr_mask;
 		msg_perr("Timeout error between offset 0x%08x and "
 			 "0x%08x (= 0x%08x + %d)!\n",
 			 addr, addr + len - 1, addr, len - 1);
@@ -1310,7 +1332,7 @@ static int ich_hwseq_wait_for_cycle_complete(unsigned int timeout,
 	}
 
 	if (hsfs & HSFS_FCERR) {
-		addr = REGREAD32(ICH9_REG_FADDR) & hwseq_data.addr_mask;
+		addr = REGREAD32(ICH9_REG_FADDR) & addr_mask;
 		msg_perr("Transaction error between offset 0x%08x and "
 			 "0x%08x (= 0x%08x + %d)!\n",
 			 addr, addr + len - 1, addr, len - 1);
@@ -1321,16 +1343,91 @@ static int ich_hwseq_wait_for_cycle_complete(unsigned int timeout,
 	return 0;
 }
 
+static int ich_hwseq_read_status(const struct flashctx *flash, enum flash_reg reg, uint8_t *value)
+{
+	uint16_t hsfc;
+	const int len = 1;
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
+
+	if (reg != STATUS1) {
+		msg_perr("%s: only supports STATUS1\n", __func__);
+		return -1;
+	}
+	msg_pdbg("Reading Status register\n");
+	ich_hwseq_set_addr(0, hwseq_data->addr_mask);
+
+	/* clear FDONE, FCERR, AEL by writing 1 to them (if they are set) */
+	REGWRITE16(ICH9_REG_HSFS, REGREAD16(ICH9_REG_HSFS));
+
+	hsfc = REGREAD16(ICH9_REG_HSFC);
+	hsfc &= ~hwseq_data->hsfc_fcycle; /* set read operation */
+
+	/* read status register */
+	hsfc |= HSFC_CYCLE_RD_STATUS;
+	hsfc &= ~HSFC_FDBC; /* clear byte count */
+
+	/* set byte count */
+	hsfc |= HSFC_FDBC_VAL(len - 1);
+	hsfc |= HSFC_FGO; /* start */
+	REGWRITE16(ICH9_REG_HSFC, hsfc);
+
+	if (ich_hwseq_wait_for_cycle_complete(len, ich_generation, hwseq_data->addr_mask)) {
+		msg_perr("Reading Status register failed\n!!");
+		return -1;
+	}
+	ich_read_data(value, len, ICH9_REG_FDATA0);
+
+	return 0;
+}
+
+static int ich_hwseq_write_status(const struct flashctx *flash, enum flash_reg reg, uint8_t value)
+{
+	uint16_t hsfc;
+	const int len = 1;
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
+
+	if (reg != STATUS1) {
+		msg_perr("%s: only supports STATUS1\n", __func__);
+		return -1;
+	}
+	msg_pdbg("Writing status register\n");
+	ich_hwseq_set_addr(0, hwseq_data->addr_mask);
+
+	/* clear FDONE, FCERR, AEL by writing 1 to them (if they are set) */
+	REGWRITE16(ICH9_REG_HSFS, REGREAD16(ICH9_REG_HSFS));
+
+	ich_fill_data(&value, len, ICH9_REG_FDATA0);
+	hsfc = REGREAD16(ICH9_REG_HSFC);
+	hsfc &= ~hwseq_data->hsfc_fcycle; /* clear operation */
+
+	/* write status register */
+	hsfc |= HSFC_CYCLE_WR_STATUS;
+	hsfc &= ~HSFC_FDBC; /* clear byte count */
+
+	/* set byte count */
+	hsfc |= HSFC_FDBC_VAL(len - 1);
+	hsfc |= HSFC_FGO; /* start */
+	REGWRITE16(ICH9_REG_HSFC, hsfc);
+
+	if (ich_hwseq_wait_for_cycle_complete(len, ich_generation, hwseq_data->addr_mask)) {
+		msg_perr("Writing Status register failed\n!!");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int ich_hwseq_probe(struct flashctx *flash)
 {
 	uint32_t total_size, boundary;
 	uint32_t erase_size_low, size_low, erase_size_high, size_high;
 	struct block_eraser *eraser;
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
-	total_size = hwseq_data.size_comp0 + hwseq_data.size_comp1;
+	total_size = hwseq_data->size_comp0 + hwseq_data->size_comp1;
 	msg_cdbg("Hardware sequencing reports %d attached SPI flash chip",
-		 (hwseq_data.size_comp1 != 0) ? 2 : 1);
-	if (hwseq_data.size_comp1 != 0)
+		 (hwseq_data->size_comp1 != 0) ? 2 : 1);
+	if (hwseq_data->size_comp1 != 0)
 		msg_cdbg("s with a combined");
 	else
 		msg_cdbg(" with a");
@@ -1338,12 +1435,12 @@ static int ich_hwseq_probe(struct flashctx *flash)
 	flash->chip->total_size = total_size / 1024;
 
 	eraser = &(flash->chip->block_erasers[0]);
-	if (!hwseq_data.only_4k)
+	if (!hwseq_data->only_4k)
 		boundary = (REGREAD32(ICH9_REG_FPB) & FPB_FPBA) << 12;
 	else
 		boundary = 0;
 	size_high = total_size - boundary;
-	erase_size_high = ich_hwseq_get_erase_block_size(boundary);
+	erase_size_high = ich_hwseq_get_erase_block_size(boundary, hwseq_data->addr_mask, hwseq_data->only_4k);
 
 	if (boundary == 0) {
 		msg_cdbg2("There is only one partition containing the whole "
@@ -1357,12 +1454,11 @@ static int ich_hwseq_probe(struct flashctx *flash)
 			 "at address 0x%06x in two partitions.\n",
 			 0, total_size-1, boundary);
 		size_low = total_size - size_high;
-		erase_size_low = ich_hwseq_get_erase_block_size(0);
+		erase_size_low = ich_hwseq_get_erase_block_size(0, hwseq_data->addr_mask, hwseq_data->only_4k);
 
 		eraser->eraseblocks[0].size = erase_size_low;
 		eraser->eraseblocks[0].count = size_low / erase_size_low;
-		msg_cdbg("The first partition ranges from 0x%06x to 0x%06x.\n",
-			 0, size_low-1);
+		msg_cdbg("The first partition ranges from 0x%06x to 0x%06x.\n", 0, size_low-1);
 		msg_cdbg("In that range are %d erase blocks with %d B each.\n",
 			 size_low / erase_size_low, erase_size_low);
 
@@ -1382,9 +1478,9 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 {
 	uint32_t erase_block;
 	uint16_t hsfc;
-	uint32_t timeout = 5000 * 1000; /* 5 s for max 64 kB */
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
-	erase_block = ich_hwseq_get_erase_block_size(addr);
+	erase_block = ich_hwseq_get_erase_block_size(addr, hwseq_data->addr_mask, hwseq_data->only_4k);
 	if (len != erase_block) {
 		msg_cerr("Erase block size for address 0x%06x is %d B, "
 			 "but requested erase block size is %d B. "
@@ -1403,26 +1499,30 @@ static int ich_hwseq_block_erase(struct flashctx *flash, unsigned int addr,
 
 	if (addr + len > flash->chip->total_size * 1024) {
 		msg_perr("Request to erase some inaccessible memory address(es)"
-			 " (addr=0x%x, len=%d). "
-			 "Not erasing anything.\n", addr, len);
+			 " (addr=0x%x, len=%d). Not erasing anything.\n", addr, len);
 		return -1;
 	}
 
 	msg_pdbg("Erasing %d bytes starting at 0x%06x.\n", len, addr);
-	ich_hwseq_set_addr(addr);
+	ich_hwseq_set_addr(addr, hwseq_data->addr_mask);
 
 	/* make sure FDONE, FCERR, AEL are cleared by writing 1 to them */
 	REGWRITE16(ICH9_REG_HSFS, REGREAD16(ICH9_REG_HSFS));
 
+	if (REGREAD8(ICH9_REG_HSFS) & HSFS_SCIP) {
+		msg_perr("Error: SCIP bit is unexpectedly set.\n");
+		return -1;
+	}
+
 	hsfc = REGREAD16(ICH9_REG_HSFC);
-	hsfc &= ~hwseq_data.hsfc_fcycle; /* clear operation */
-	hsfc |= (0x3 << HSFC_FCYCLE_OFF); /* set erase operation */
+	hsfc &= ~hwseq_data->hsfc_fcycle; /* clear operation */
+	hsfc |= HSFC_CYCLE_BLOCK_ERASE; /* set erase operation */
 	hsfc |= HSFC_FGO; /* start */
 	msg_pdbg("HSFC used for block erasing: ");
 	prettyprint_ich9_reg_hsfc(hsfc, ich_generation);
 	REGWRITE16(ICH9_REG_HSFC, hsfc);
 
-	if (ich_hwseq_wait_for_cycle_complete(timeout, len, ich_generation))
+	if (ich_hwseq_wait_for_cycle_complete(len, ich_generation, hwseq_data->addr_mask))
 		return -1;
 	return 0;
 }
@@ -1431,8 +1531,8 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 			  unsigned int addr, unsigned int len)
 {
 	uint16_t hsfc;
-	uint16_t timeout = 100 * 60;
 	uint8_t block_len;
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
 	if (addr + len > flash->chip->total_size * 1024) {
 		msg_perr("Request to read from an inaccessible memory address "
@@ -1450,16 +1550,23 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
 
-		ich_hwseq_set_addr(addr);
+		ich_hwseq_set_addr(addr, hwseq_data->addr_mask);
+
+		if (REGREAD8(ICH9_REG_HSFS) & HSFS_SCIP) {
+			msg_perr("Error: SCIP bit is unexpectedly set.\n");
+			return -1;
+		}
+
 		hsfc = REGREAD16(ICH9_REG_HSFC);
-		hsfc &= ~hwseq_data.hsfc_fcycle; /* set read operation */
+		hsfc &= ~hwseq_data->hsfc_fcycle; /* set read operation */
 		hsfc &= ~HSFC_FDBC; /* clear byte count */
+		hsfc |= HSFC_CYCLE_READ; /* set read operation */
 		/* set byte count */
-		hsfc |= (((block_len - 1) << HSFC_FDBC_OFF) & HSFC_FDBC);
+		hsfc |= HSFC_FDBC_VAL(block_len - 1);
 		hsfc |= HSFC_FGO; /* start */
 		REGWRITE16(ICH9_REG_HSFC, hsfc);
 
-		if (ich_hwseq_wait_for_cycle_complete(timeout, block_len, ich_generation))
+		if (ich_hwseq_wait_for_cycle_complete(block_len, ich_generation, hwseq_data->addr_mask))
 			return 1;
 		ich_read_data(buf, block_len, ICH9_REG_FDATA0);
 		addr += block_len;
@@ -1472,8 +1579,8 @@ static int ich_hwseq_read(struct flashctx *flash, uint8_t *buf,
 static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned int addr, unsigned int len)
 {
 	uint16_t hsfc;
-	uint16_t timeout = 100 * 60;
 	uint8_t block_len;
+	const struct hwseq_data *hwseq_data = get_hwseq_data_from_context(flash);
 
 	if (addr + len > flash->chip->total_size * 1024) {
 		msg_perr("Request to write to an inaccessible memory address "
@@ -1486,22 +1593,28 @@ static int ich_hwseq_write(struct flashctx *flash, const uint8_t *buf, unsigned 
 	REGWRITE16(ICH9_REG_HSFS, REGREAD16(ICH9_REG_HSFS));
 
 	while (len > 0) {
-		ich_hwseq_set_addr(addr);
+		ich_hwseq_set_addr(addr, hwseq_data->addr_mask);
 		/* Obey programmer limit... */
 		block_len = min(len, flash->mst->opaque.max_data_write);
 		/* as well as flash chip page borders as demanded in the Intel datasheets. */
 		block_len = min(block_len, 256 - (addr & 0xFF));
 		ich_fill_data(buf, block_len, ICH9_REG_FDATA0);
+
+		if (REGREAD8(ICH9_REG_HSFS) & HSFS_SCIP) {
+			msg_perr("Error: SCIP bit is unexpectedly set.\n");
+			return -1;
+		}
+
 		hsfc = REGREAD16(ICH9_REG_HSFC);
-		hsfc &= ~hwseq_data.hsfc_fcycle; /* clear operation */
-		hsfc |= (0x2 << HSFC_FCYCLE_OFF); /* set write operation */
+		hsfc &= ~hwseq_data->hsfc_fcycle; /* clear operation */
+		hsfc |= HSFC_CYCLE_WRITE; /* set write operation */
 		hsfc &= ~HSFC_FDBC; /* clear byte count */
 		/* set byte count */
-		hsfc |= (((block_len - 1) << HSFC_FDBC_OFF) & HSFC_FDBC);
+		hsfc |= HSFC_FDBC_VAL(block_len - 1);
 		hsfc |= HSFC_FGO; /* start */
 		REGWRITE16(ICH9_REG_HSFC, hsfc);
 
-		if (ich_hwseq_wait_for_cycle_complete(timeout, block_len, ich_generation))
+		if (ich_hwseq_wait_for_cycle_complete(block_len, ich_generation, hwseq_data->addr_mask))
 			return -1;
 		addr += block_len;
 		buf += block_len;
@@ -1570,6 +1683,11 @@ static int ich_spi_send_multicommand(const struct flashctx *flash,
 	return ret;
 }
 
+static bool ich_spi_probe_opcode(struct flashctx *flash, uint8_t opcode)
+{
+	return find_opcode(curopcodes, opcode) >= 0;
+}
+
 #define ICH_BMWAG(x) ((x >> 24) & 0xff)
 #define ICH_BMRAG(x) ((x >> 16) & 0xff)
 #define ICH_BRWA(x)  ((x >>  8) & 0xff)
@@ -1579,12 +1697,11 @@ static const enum ich_access_protection access_perms_to_protection[] = {
 	LOCKED, WRITE_PROT, READ_PROT, NO_PROT
 };
 static const char *const access_names[] = {
-	"locked", "read-only", "write-only", "read-write"
+	"read-write", "write-only", "read-only", "locked"
 };
 
 static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i)
 {
-	const int rwperms_unknown = ARRAY_SIZE(access_names);
 	static const char *const region_names[] = {
 		"Flash Descriptor", "BIOS", "Management Engine",
 		"Gigabit Ethernet", "Platform Data", "Device Expansion",
@@ -1593,22 +1710,12 @@ static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i
 	const char *const region_name = i < ARRAY_SIZE(region_names) ? region_names[i] : "unknown";
 
 	uint32_t base, limit;
-	int rwperms;
+	unsigned int rwperms_idx;
+	enum ich_access_protection rwperms;
 	const int offset = i < 12
 		? ICH9_REG_FREG0 + i * 4
 		: APL_REG_FREG12 + (i - 12) * 4;
 	uint32_t freg = mmio_readl(ich_spibar + offset);
-
-	if (i < 8) {
-		rwperms = (((ICH_BRWA(frap) >> i) & 1) << 1) |
-			  (((ICH_BRRA(frap) >> i) & 1) << 0);
-	} else {
-		/* Datasheets don't define any access bits for regions > 7. We
-		   can't rely on the actual descriptor settings either as there
-		   are several overrides for them (those by other masters are
-		   not even readable by us, *shrug*). */
-		rwperms = rwperms_unknown;
-	}
 
 	base  = ICH_FREG_BASE(freg);
 	limit = ICH_FREG_LIMIT(freg);
@@ -1619,20 +1726,24 @@ static enum ich_access_protection ich9_handle_frap(uint32_t frap, unsigned int i
 		return NO_PROT;
 	}
 	msg_pdbg("0x%02X: 0x%08x ", offset, freg);
-	if (rwperms == 0x3) {
-		msg_pdbg("FREG%u: %s region (0x%08x-0x%08x) is %s.\n", i,
-			 region_name, base, limit, access_names[rwperms]);
-		return NO_PROT;
-	}
-	if (rwperms == rwperms_unknown) {
-		msg_pdbg("FREG%u: %s region (0x%08x-0x%08x) has unknown permissions.\n",
-			 i, region_name, base, limit);
-		return NO_PROT;
-	}
 
+	if (i < 8) {
+		rwperms_idx = (((ICH_BRWA(frap) >> i) & 1) << 1) |
+			      (((ICH_BRRA(frap) >> i) & 1) << 0);
+		rwperms = access_perms_to_protection[rwperms_idx];
+	} else {
+		/* Datasheets don't define any access bits for regions > 7. We
+		   can't rely on the actual descriptor settings either as there
+		   are several overrides for them (those by other masters are
+		   not even readable by us, *shrug*). */
+		msg_pdbg("FREG%u: %s region (0x%08x-0x%08x) has unknown permissions.\n",
+				i, region_name, base, limit);
+		return NO_PROT;
+	}
 	msg_pinfo("FREG%u: %s region (0x%08x-0x%08x) is %s.\n", i,
 		  region_name, base, limit, access_names[rwperms]);
-	return access_perms_to_protection[rwperms];
+
+	return rwperms;
 }
 
 	/* In contrast to FRAP and the master section of the descriptor the bits
@@ -1648,14 +1759,15 @@ static enum ich_access_protection ich9_handle_pr(const size_t reg_pr0, unsigned 
 {
 	uint8_t off = reg_pr0 + (i * 4);
 	uint32_t pr = mmio_readl(ich_spibar + off);
-	unsigned int rwperms = ICH_PR_PERMS(pr);
+	unsigned int rwperms_idx = ICH_PR_PERMS(pr);
+	enum ich_access_protection rwperms = access_perms_to_protection[rwperms_idx];
 
 	/* From 5 on we have GPR registers and start from 0 again. */
 	const char *const prefix = i >= 5 ? "G" : "";
 	if (i >= 5)
 		i -= 5;
 
-	if (rwperms == 0x3) {
+	if (rwperms == NO_PROT) {
 		msg_pdbg2("0x%02X: 0x%08x (%sPR%u is unused)\n", off, pr, prefix, i);
 		return NO_PROT;
 	}
@@ -1663,7 +1775,8 @@ static enum ich_access_protection ich9_handle_pr(const size_t reg_pr0, unsigned 
 	msg_pdbg("0x%02X: 0x%08x ", off, pr);
 	msg_pwarn("%sPR%u: Warning: 0x%08x-0x%08x is %s.\n", prefix, i, ICH_FREG_BASE(pr),
 		  ICH_FREG_LIMIT(pr), access_names[rwperms]);
-	return access_perms_to_protection[rwperms];
+
+	return rwperms;
 }
 
 /* Set/Clear the read and write protection enable bits of PR register @i
@@ -1690,379 +1803,440 @@ static void ich9_set_pr(const size_t reg_pr0, int i, int read_prot, int write_pr
 }
 
 static const struct spi_master spi_master_ich7 = {
-	.max_data_read = 64,
-	.max_data_write = 64,
-	.command = ich_spi_send_command,
-	.multicommand = ich_spi_send_multicommand,
-	.read = default_spi_read,
-	.write_256 = default_spi_write_256,
-	.write_aai = default_spi_write_aai,
+	.max_data_read	= 64,
+	.max_data_write	= 64,
+	.command	= ich_spi_send_command,
+	.multicommand	= ich_spi_send_multicommand,
+	.read		= default_spi_read,
+	.write_256	= default_spi_write_256,
+	.write_aai	= default_spi_write_aai,
 };
 
 static const struct spi_master spi_master_ich9 = {
-	.max_data_read = 64,
-	.max_data_write = 64,
-	.command = ich_spi_send_command,
-	.multicommand = ich_spi_send_multicommand,
-	.read = default_spi_read,
-	.write_256 = default_spi_write_256,
-	.write_aai = default_spi_write_aai,
+	.max_data_read	= 64,
+	.max_data_write	= 64,
+	.command	= ich_spi_send_command,
+	.multicommand	= ich_spi_send_multicommand,
+	.read		= default_spi_read,
+	.write_256	= default_spi_write_256,
+	.write_aai	= default_spi_write_aai,
+	.probe_opcode	= ich_spi_probe_opcode,
 };
 
 static const struct opaque_master opaque_master_ich_hwseq = {
-	.max_data_read = 64,
-	.max_data_write = 64,
-	.probe = ich_hwseq_probe,
-	.read = ich_hwseq_read,
-	.write = ich_hwseq_write,
-	.erase = ich_hwseq_block_erase,
+	.max_data_read	= 64,
+	.max_data_write	= 64,
+	.probe		= ich_hwseq_probe,
+	.read		= ich_hwseq_read,
+	.write		= ich_hwseq_write,
+	.erase		= ich_hwseq_block_erase,
+	.read_register	= ich_hwseq_read_status,
+	.write_register	= ich_hwseq_write_status,
 };
 
-int ich_init_spi(void *spibar, enum ich_chipset ich_gen)
+static int init_ich7_spi(void *spibar, enum ich_chipset ich_gen)
 {
 	unsigned int i;
-	uint16_t tmp2;
-	uint32_t tmp;
-	char *arg;
-	int ich_spi_rw_restricted = 0;
-	int desc_valid = 0;
-	struct ich_descriptors desc;
-	enum ich_spi_mode {
-		ich_auto,
-		ich_hwseq,
-		ich_swseq
-	} ich_spi_mode = ich_auto;
-	size_t num_freg, num_pr, reg_pr0;
 
-	ich_generation = ich_gen;
-	ich_spibar = spibar;
+	msg_pdbg("0x00: 0x%04x     (SPIS)\n",	mmio_readw(spibar + 0));
+	msg_pdbg("0x02: 0x%04x     (SPIC)\n",	mmio_readw(spibar + 2));
+	msg_pdbg("0x04: 0x%08x (SPIA)\n",	mmio_readl(spibar + 4));
 
-	memset(&desc, 0x00, sizeof(struct ich_descriptors));
+	ichspi_bbar = mmio_readl(spibar + 0x50);
 
+	msg_pdbg("0x50: 0x%08x (BBAR)\n",	ichspi_bbar);
+	msg_pdbg("0x54: 0x%04x     (PREOP)\n",	mmio_readw(spibar + 0x54));
+	msg_pdbg("0x56: 0x%04x     (OPTYPE)\n",	mmio_readw(spibar + 0x56));
+	msg_pdbg("0x58: 0x%08x (OPMENU)\n",	mmio_readl(spibar + 0x58));
+	msg_pdbg("0x5c: 0x%08x (OPMENU+4)\n",	mmio_readl(spibar + 0x5c));
+
+	for (i = 0; i < 3; i++) {
+		int offs;
+		offs = 0x60 + (i * 4);
+		msg_pdbg("0x%02x: 0x%08x (PBR%u)\n", offs, mmio_readl(spibar + offs), i);
+	}
+	if (mmio_readw(spibar) & (1 << 15)) {
+		msg_pwarn("WARNING: SPI Configuration Lockdown activated.\n");
+		ichspi_lock = 1;
+	}
+	ich_init_opcodes(ich_gen);
+	ich_set_bbar(0, ich_gen);
+	register_spi_master(&spi_master_ich7, NULL);
+
+	return 0;
+}
+
+enum ich_spi_mode {
+	ich_auto,
+	ich_hwseq,
+	ich_swseq
+};
+
+static int get_ich_spi_mode_param(enum ich_spi_mode *ich_spi_mode)
+{
+	char *const arg = extract_programmer_param_str("ich_spi_mode");
+	if (!arg) {
+		return 0;
+	} else if (!strcmp(arg, "hwseq")) {
+		*ich_spi_mode = ich_hwseq;
+		msg_pspew("user selected hwseq\n");
+	} else if (!strcmp(arg, "swseq")) {
+		*ich_spi_mode = ich_swseq;
+		msg_pspew("user selected swseq\n");
+	} else if (!strcmp(arg, "auto")) {
+		msg_pspew("user selected auto\n");
+		*ich_spi_mode = ich_auto;
+	} else if (!strlen(arg)) {
+		msg_perr("Missing argument for ich_spi_mode.\n");
+		free(arg);
+		return ERROR_FATAL;
+	} else {
+		msg_perr("Unknown argument for ich_spi_mode: %s\n", arg);
+		free(arg);
+		return ERROR_FATAL;
+	}
+	free(arg);
+
+	return 0;
+}
+
+static void init_chipset_properties(struct swseq_data *swseq, struct hwseq_data *hwseq,
+					size_t *num_freg, size_t *num_pr, size_t *reg_pr0,
+					enum ich_chipset ich_gen)
+{
 	/* Moving registers / bits */
 	switch (ich_gen) {
 	case CHIPSET_100_SERIES_SUNRISE_POINT:
 	case CHIPSET_C620_SERIES_LEWISBURG:
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
 	case CHIPSET_APOLLO_LAKE:
-		num_pr			= 6;	/* Includes GPR0 */
-		reg_pr0			= PCH100_REG_FPR0;
-		swseq_data.reg_ssfsc	= PCH100_REG_SSFSC;
-		swseq_data.reg_preop	= PCH100_REG_PREOP;
-		swseq_data.reg_optype	= PCH100_REG_OPTYPE;
-		swseq_data.reg_opmenu	= PCH100_REG_OPMENU;
-		hwseq_data.addr_mask	= PCH100_FADDR_FLA;
-		hwseq_data.only_4k	= true;
-		hwseq_data.hsfc_fcycle	= PCH100_HSFC_FCYCLE;
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
+	case CHIPSET_ELKHART_LAKE:
+		*num_pr			= 6;	/* Includes GPR0 */
+		*reg_pr0		= PCH100_REG_FPR0;
+		swseq->reg_ssfsc	= PCH100_REG_SSFSC;
+		swseq->reg_preop	= PCH100_REG_PREOP;
+		swseq->reg_optype	= PCH100_REG_OPTYPE;
+		swseq->reg_opmenu	= PCH100_REG_OPMENU;
+		hwseq->addr_mask	= PCH100_FADDR_FLA;
+		hwseq->only_4k		= true;
+		hwseq->hsfc_fcycle	= PCH100_HSFC_FCYCLE;
 		break;
 	default:
-		num_pr			= 5;
-		reg_pr0			= ICH9_REG_PR0;
-		swseq_data.reg_ssfsc	= ICH9_REG_SSFS;
-		swseq_data.reg_preop	= ICH9_REG_PREOP;
-		swseq_data.reg_optype	= ICH9_REG_OPTYPE;
-		swseq_data.reg_opmenu	= ICH9_REG_OPMENU;
-		hwseq_data.addr_mask	= ICH9_FADDR_FLA;
-		hwseq_data.only_4k	= false;
-		hwseq_data.hsfc_fcycle	= HSFC_FCYCLE;
+		*num_pr			= 5;
+		*reg_pr0		= ICH9_REG_PR0;
+		swseq->reg_ssfsc	= ICH9_REG_SSFS;
+		swseq->reg_preop	= ICH9_REG_PREOP;
+		swseq->reg_optype	= ICH9_REG_OPTYPE;
+		swseq->reg_opmenu	= ICH9_REG_OPMENU;
+		hwseq->addr_mask	= ICH9_FADDR_FLA;
+		hwseq->only_4k		= false;
+		hwseq->hsfc_fcycle	= HSFC_FCYCLE;
 		break;
 	}
+
 	switch (ich_gen) {
 	case CHIPSET_100_SERIES_SUNRISE_POINT:
-		num_freg = 10;
+		*num_freg = 10;
 		break;
 	case CHIPSET_C620_SERIES_LEWISBURG:
-		num_freg = 12;	/* 12 MMIO regs, but 16 regions in FD spec */
+		*num_freg = 12;	/* 12 MMIO regs, but 16 regions in FD spec */
 		break;
 	case CHIPSET_300_SERIES_CANNON_POINT:
 	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
 	case CHIPSET_APOLLO_LAKE:
-		num_freg = 16;
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
+	case CHIPSET_ELKHART_LAKE:
+		*num_freg = 16;
 		break;
 	default:
-		num_freg = 5;
+		*num_freg = 5;
+		break;
+	}
+}
+
+static int init_ich_default(void *spibar, enum ich_chipset ich_gen)
+{
+	unsigned int i;
+	uint16_t tmp2;
+	uint32_t tmp;
+	int ich_spi_rw_restricted = 0;
+	int desc_valid = 0;
+	struct ich_descriptors desc = { 0 };
+	enum ich_spi_mode ich_spi_mode = ich_auto;
+	size_t num_freg, num_pr, reg_pr0;
+
+	init_chipset_properties(&swseq_data, &g_hwseq_data, &num_freg, &num_pr, &reg_pr0, ich_gen);
+
+	int ret = get_ich_spi_mode_param(&ich_spi_mode);
+	if (ret)
+		return ret;
+
+	tmp2 = mmio_readw(spibar + ICH9_REG_HSFS);
+	msg_pdbg("0x04: 0x%04x (HSFS)\n", tmp2);
+	prettyprint_ich9_reg_hsfs(tmp2, ich_gen);
+	if (tmp2 & HSFS_FLOCKDN) {
+		msg_pinfo("SPI Configuration is locked down.\n");
+		ichspi_lock = 1;
+	}
+	if (tmp2 & HSFS_FDV)
+		desc_valid = 1;
+	if (!(tmp2 & HSFS_FDOPSS) && desc_valid)
+		msg_pinfo("The Flash Descriptor Override Strap-Pin is set. Restrictions implied by\n"
+			  "the Master Section of the flash descriptor are NOT in effect. Please note\n"
+			  "that Protected Range (PR) restrictions still apply.\n");
+	ich_init_opcodes(ich_gen);
+
+	if (desc_valid) {
+		tmp2 = mmio_readw(spibar + ICH9_REG_HSFC);
+		msg_pdbg("0x06: 0x%04x (HSFC)\n", tmp2);
+		prettyprint_ich9_reg_hsfc(tmp2, ich_gen);
+	}
+
+	tmp = mmio_readl(spibar + ICH9_REG_FADDR);
+	msg_pdbg2("0x08: 0x%08x (FADDR)\n", tmp);
+
+	switch (ich_gen) {
+	case CHIPSET_100_SERIES_SUNRISE_POINT:
+	case CHIPSET_C620_SERIES_LEWISBURG:
+	case CHIPSET_300_SERIES_CANNON_POINT:
+	case CHIPSET_400_SERIES_COMET_POINT:
+	case CHIPSET_500_SERIES_TIGER_POINT:
+	case CHIPSET_600_SERIES_ALDER_POINT:
+	case CHIPSET_METEOR_LAKE:
+	case CHIPSET_APOLLO_LAKE:
+	case CHIPSET_GEMINI_LAKE:
+	case CHIPSET_JASPER_LAKE:
+	case CHIPSET_ELKHART_LAKE:
+		tmp = mmio_readl(spibar + PCH100_REG_DLOCK);
+		msg_pdbg("0x0c: 0x%08x (DLOCK)\n", tmp);
+		prettyprint_pch100_reg_dlock(tmp);
+		break;
+	default:
 		break;
 	}
 
-	switch (ich_gen) {
-	case CHIPSET_ICH7:
-	case CHIPSET_TUNNEL_CREEK:
-	case CHIPSET_CENTERTON:
-		msg_pdbg("0x00: 0x%04x     (SPIS)\n",
-			     mmio_readw(spibar + 0));
-		msg_pdbg("0x02: 0x%04x     (SPIC)\n",
-			     mmio_readw(spibar + 2));
-		msg_pdbg("0x04: 0x%08x (SPIA)\n",
-			     mmio_readl(spibar + 4));
-		ichspi_bbar = mmio_readl(spibar + 0x50);
-		msg_pdbg("0x50: 0x%08x (BBAR)\n",
-			     ichspi_bbar);
-		msg_pdbg("0x54: 0x%04x     (PREOP)\n",
-			     mmio_readw(spibar + 0x54));
-		msg_pdbg("0x56: 0x%04x     (OPTYPE)\n",
-			     mmio_readw(spibar + 0x56));
-		msg_pdbg("0x58: 0x%08x (OPMENU)\n",
-			     mmio_readl(spibar + 0x58));
-		msg_pdbg("0x5c: 0x%08x (OPMENU+4)\n",
-			     mmio_readl(spibar + 0x5c));
-		for (i = 0; i < 3; i++) {
-			int offs;
-			offs = 0x60 + (i * 4);
-			msg_pdbg("0x%02x: 0x%08x (PBR%u)\n", offs,
-				     mmio_readl(spibar + offs), i);
-		}
-		if (mmio_readw(spibar) & (1 << 15)) {
-			msg_pwarn("WARNING: SPI Configuration Lockdown activated.\n");
-			ichspi_lock = 1;
-		}
-		ich_init_opcodes(ich_gen);
-		ich_set_bbar(0, ich_gen);
-		register_spi_master(&spi_master_ich7);
+	if (desc_valid) {
+		tmp = mmio_readl(spibar + ICH9_REG_FRAP);
+		msg_pdbg("0x50: 0x%08x (FRAP)\n", tmp);
+		msg_pdbg("BMWAG 0x%02x, ", ICH_BMWAG(tmp));
+		msg_pdbg("BMRAG 0x%02x, ", ICH_BMRAG(tmp));
+		msg_pdbg("BRWA 0x%02x, ", ICH_BRWA(tmp));
+		msg_pdbg("BRRA 0x%02x\n", ICH_BRRA(tmp));
+
+		/* Handle FREGx and FRAP registers */
+		for (i = 0; i < num_freg; i++)
+			ich_spi_rw_restricted |= ich9_handle_frap(tmp, i);
+		if (ich_spi_rw_restricted)
+			msg_pinfo("Not all flash regions are freely accessible by flashrom. This is "
+				  "most likely\ndue to an active ME. Please see "
+				  "https://flashrom.org/ME for details.\n");
+	}
+
+	/* Handle PR registers */
+	for (i = 0; i < num_pr; i++) {
+		/* if not locked down try to disable PR locks first */
+		if (!ichspi_lock)
+			ich9_set_pr(reg_pr0, i, 0, 0);
+		ich_spi_rw_restricted |= ich9_handle_pr(reg_pr0, i);
+	}
+
+	switch (ich_spi_rw_restricted) {
+	case WRITE_PROT:
+		msg_pwarn("At least some flash regions are write protected. For write operations,\n"
+			  "you should use a flash layout and include only writable regions. See\n"
+			  "manpage for more details.\n");
 		break;
-	case CHIPSET_ICH8:
-	default:		/* Future version might behave the same */
-		arg = extract_programmer_param("ich_spi_mode");
-		if (arg && !strcmp(arg, "hwseq")) {
-			ich_spi_mode = ich_hwseq;
-			msg_pspew("user selected hwseq\n");
-		} else if (arg && !strcmp(arg, "swseq")) {
-			ich_spi_mode = ich_swseq;
-			msg_pspew("user selected swseq\n");
-		} else if (arg && !strcmp(arg, "auto")) {
-			msg_pspew("user selected auto\n");
-			ich_spi_mode = ich_auto;
-		} else if (arg && !strlen(arg)) {
-			msg_perr("Missing argument for ich_spi_mode.\n");
-			free(arg);
-			return ERROR_FATAL;
-		} else if (arg) {
-			msg_perr("Unknown argument for ich_spi_mode: %s\n",
-				 arg);
-			free(arg);
-			return ERROR_FATAL;
-		}
-		free(arg);
+	case READ_PROT:
+	case LOCKED:
+		msg_pwarn("At least some flash regions are read protected. You have to use a flash\n"
+			  "layout and include only accessible regions. For write operations, you'll\n"
+			  "additionally need the --noverify-all switch. See manpage for more details.\n");
+		break;
+	}
 
-		tmp2 = mmio_readw(spibar + ICH9_REG_HSFS);
-		msg_pdbg("0x04: 0x%04x (HSFS)\n", tmp2);
-		prettyprint_ich9_reg_hsfs(tmp2, ich_gen);
-		if (tmp2 & HSFS_FLOCKDN) {
-			msg_pinfo("SPI Configuration is locked down.\n");
-			ichspi_lock = 1;
-		}
-		if (tmp2 & HSFS_FDV)
-			desc_valid = 1;
-		if (!(tmp2 & HSFS_FDOPSS) && desc_valid)
-			msg_pinfo("The Flash Descriptor Override Strap-Pin is set. Restrictions implied by\n"
-				  "the Master Section of the flash descriptor are NOT in effect. Please note\n"
-				  "that Protected Range (PR) restrictions still apply.\n");
-		ich_init_opcodes(ich_gen);
+	tmp = mmio_readl(spibar + swseq_data.reg_ssfsc);
+	msg_pdbg("0x%zx: 0x%02x (SSFS)\n", swseq_data.reg_ssfsc, tmp & 0xff);
+	prettyprint_ich9_reg_ssfs(tmp);
+	if (tmp & SSFS_FCERR) {
+		msg_pdbg("Clearing SSFS.FCERR\n");
+		mmio_writeb(SSFS_FCERR, spibar + swseq_data.reg_ssfsc);
+	}
+	msg_pdbg("0x%zx: 0x%06x (SSFC)\n", swseq_data.reg_ssfsc + 1, tmp >> 8);
+	prettyprint_ich9_reg_ssfc(tmp);
 
-		if (desc_valid) {
-			tmp2 = mmio_readw(spibar + ICH9_REG_HSFC);
-			msg_pdbg("0x06: 0x%04x (HSFC)\n", tmp2);
-			prettyprint_ich9_reg_hsfc(tmp2, ich_gen);
-		}
+	msg_pdbg("0x%zx: 0x%04x     (PREOP)\n",
+		 swseq_data.reg_preop, mmio_readw(spibar + swseq_data.reg_preop));
+	msg_pdbg("0x%zx: 0x%04x     (OPTYPE)\n",
+		 swseq_data.reg_optype, mmio_readw(spibar + swseq_data.reg_optype));
+	msg_pdbg("0x%zx: 0x%08x (OPMENU)\n",
+		 swseq_data.reg_opmenu, mmio_readl(spibar + swseq_data.reg_opmenu));
+	msg_pdbg("0x%zx: 0x%08x (OPMENU+4)\n",
+		 swseq_data.reg_opmenu + 4, mmio_readl(spibar + swseq_data.reg_opmenu + 4));
 
-		tmp = mmio_readl(spibar + ICH9_REG_FADDR);
-		msg_pdbg2("0x08: 0x%08x (FADDR)\n", tmp);
-
+	if (desc_valid) {
 		switch (ich_gen) {
+		case CHIPSET_ICH8:
 		case CHIPSET_100_SERIES_SUNRISE_POINT:
 		case CHIPSET_C620_SERIES_LEWISBURG:
 		case CHIPSET_300_SERIES_CANNON_POINT:
 		case CHIPSET_400_SERIES_COMET_POINT:
+		case CHIPSET_500_SERIES_TIGER_POINT:
+		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_METEOR_LAKE:
 		case CHIPSET_APOLLO_LAKE:
-			tmp = mmio_readl(spibar + PCH100_REG_DLOCK);
-			msg_pdbg("0x0c: 0x%08x (DLOCK)\n", tmp);
-			prettyprint_pch100_reg_dlock(tmp);
+		case CHIPSET_GEMINI_LAKE:
+		case CHIPSET_JASPER_LAKE:
+		case CHIPSET_BAYTRAIL:
+		case CHIPSET_ELKHART_LAKE:
 			break;
 		default:
+			ichspi_bbar = mmio_readl(spibar + ICH9_REG_BBAR);
+			msg_pdbg("0x%x: 0x%08x (BBAR)\n", ICH9_REG_BBAR, ichspi_bbar);
+			ich_set_bbar(0, ich_gen);
 			break;
 		}
 
-		if (desc_valid) {
-			tmp = mmio_readl(spibar + ICH9_REG_FRAP);
-			msg_pdbg("0x50: 0x%08x (FRAP)\n", tmp);
-			msg_pdbg("BMWAG 0x%02x, ", ICH_BMWAG(tmp));
-			msg_pdbg("BMRAG 0x%02x, ", ICH_BMRAG(tmp));
-			msg_pdbg("BRWA 0x%02x, ", ICH_BRWA(tmp));
-			msg_pdbg("BRRA 0x%02x\n", ICH_BRRA(tmp));
-
-			/* Handle FREGx and FRAP registers */
-			for (i = 0; i < num_freg; i++)
-				ich_spi_rw_restricted |= ich9_handle_frap(tmp, i);
-			if (ich_spi_rw_restricted)
-				msg_pinfo("Not all flash regions are freely accessible by flashrom. This is "
-					  "most likely\ndue to an active ME. Please see "
-					  "https://flashrom.org/ME for details.\n");
-		}
-
-		/* Handle PR registers */
-		for (i = 0; i < num_pr; i++) {
-			/* if not locked down try to disable PR locks first */
-			if (!ichspi_lock)
-				ich9_set_pr(reg_pr0, i, 0, 0);
-			ich_spi_rw_restricted |= ich9_handle_pr(reg_pr0, i);
-		}
-
-		switch (ich_spi_rw_restricted) {
-		case WRITE_PROT:
-			msg_pwarn("At least some flash regions are write protected. For write operations,\n"
-				  "you should use a flash layout and include only writable regions. See\n"
-				  "manpage for more details.\n");
-			break;
-		case READ_PROT:
-		case LOCKED:
-			msg_pwarn("At least some flash regions are read protected. You have to use a flash\n"
-				  "layout and include only accessible regions. For write operations, you'll\n"
-				  "additionally need the --noverify-all switch. See manpage for more details.\n"
-				  );
-			break;
-		}
-
-		tmp = mmio_readl(spibar + swseq_data.reg_ssfsc);
-		msg_pdbg("0x%zx: 0x%02x (SSFS)\n", swseq_data.reg_ssfsc, tmp & 0xff);
-		prettyprint_ich9_reg_ssfs(tmp);
-		if (tmp & SSFS_FCERR) {
-			msg_pdbg("Clearing SSFS.FCERR\n");
-			mmio_writeb(SSFS_FCERR, spibar + swseq_data.reg_ssfsc);
-		}
-		msg_pdbg("0x%zx: 0x%06x (SSFC)\n", swseq_data.reg_ssfsc + 1, tmp >> 8);
-		prettyprint_ich9_reg_ssfc(tmp);
-
-		msg_pdbg("0x%zx: 0x%04x     (PREOP)\n",
-			 swseq_data.reg_preop, mmio_readw(spibar + swseq_data.reg_preop));
-		msg_pdbg("0x%zx: 0x%04x     (OPTYPE)\n",
-			 swseq_data.reg_optype, mmio_readw(spibar + swseq_data.reg_optype));
-		msg_pdbg("0x%zx: 0x%08x (OPMENU)\n",
-			 swseq_data.reg_opmenu, mmio_readl(spibar + swseq_data.reg_opmenu));
-		msg_pdbg("0x%zx: 0x%08x (OPMENU+4)\n",
-			 swseq_data.reg_opmenu + 4, mmio_readl(spibar + swseq_data.reg_opmenu + 4));
-
-		if (desc_valid) {
-			switch (ich_gen) {
-			case CHIPSET_ICH8:
-			case CHIPSET_100_SERIES_SUNRISE_POINT:
-			case CHIPSET_C620_SERIES_LEWISBURG:
-			case CHIPSET_300_SERIES_CANNON_POINT:
-			case CHIPSET_400_SERIES_COMET_POINT:
-			case CHIPSET_APOLLO_LAKE:
-			case CHIPSET_BAYTRAIL:
-				break;
-			default:
-				ichspi_bbar = mmio_readl(spibar + ICH9_REG_BBAR);
-				msg_pdbg("0x%x: 0x%08x (BBAR)\n", ICH9_REG_BBAR, ichspi_bbar);
-				ich_set_bbar(0, ich_gen);
-				break;
-			}
-
-			if (ich_gen == CHIPSET_ICH8) {
-				tmp = mmio_readl(spibar + ICH8_REG_VSCC);
-				msg_pdbg("0x%x: 0x%08x (VSCC)\n", ICH8_REG_VSCC, tmp);
-				msg_pdbg("VSCC: ");
-				prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, true);
-			} else {
-				tmp = mmio_readl(spibar + ICH9_REG_LVSCC);
-				msg_pdbg("0x%x: 0x%08x (LVSCC)\n", ICH9_REG_LVSCC, tmp);
-				msg_pdbg("LVSCC: ");
-				prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, true);
-
-				tmp = mmio_readl(spibar + ICH9_REG_UVSCC);
-				msg_pdbg("0x%x: 0x%08x (UVSCC)\n", ICH9_REG_UVSCC, tmp);
-				msg_pdbg("UVSCC: ");
-				prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, false);
-			}
-
-			switch (ich_gen) {
-			case CHIPSET_ICH8:
-			case CHIPSET_100_SERIES_SUNRISE_POINT:
-			case CHIPSET_C620_SERIES_LEWISBURG:
-			case CHIPSET_300_SERIES_CANNON_POINT:
-			case CHIPSET_400_SERIES_COMET_POINT:
-			case CHIPSET_APOLLO_LAKE:
-				break;
-			default:
-				tmp = mmio_readl(spibar + ICH9_REG_FPB);
-				msg_pdbg("0x%x: 0x%08x (FPB)\n", ICH9_REG_FPB, tmp);
-				break;
-			}
-
-			if (read_ich_descriptors_via_fdo(ich_gen, spibar, &desc) == ICH_RET_OK)
-				prettyprint_ich_descriptors(ich_gen, &desc);
-
-			/* If the descriptor is valid and indicates multiple
-			 * flash devices we need to use hwseq to be able to
-			 * access the second flash device.
-			 */
-			if (ich_spi_mode == ich_auto && desc.content.NC != 0) {
-				msg_pinfo("Enabling hardware sequencing due to "
-					  "multiple flash chips detected.\n");
-				ich_spi_mode = ich_hwseq;
-			}
-		}
-
-		if (ich_spi_mode == ich_auto && ichspi_lock &&
-		    ich_missing_opcodes()) {
-			msg_pinfo("Enabling hardware sequencing because "
-				  "some important opcode is locked.\n");
-			ich_spi_mode = ich_hwseq;
-		}
-
-		if (ich_spi_mode == ich_auto &&
-		    (ich_gen == CHIPSET_100_SERIES_SUNRISE_POINT ||
-		     ich_gen == CHIPSET_300_SERIES_CANNON_POINT ||
-		     ich_gen == CHIPSET_400_SERIES_COMET_POINT)) {
-			msg_pdbg("Enabling hardware sequencing by default for 100+ series PCH.\n");
-			ich_spi_mode = ich_hwseq;
-		}
-
-		if (ich_spi_mode == ich_auto && ich_gen == CHIPSET_APOLLO_LAKE) {
-			msg_pdbg("Enabling hardware sequencing by default for Apollo Lake.\n");
-			ich_spi_mode = ich_hwseq;
-		}
-
-		if (ich_spi_mode == ich_hwseq) {
-			if (!desc_valid) {
-				msg_perr("Hardware sequencing was requested "
-					 "but the flash descriptor is not "
-					 "valid. Aborting.\n");
-				return ERROR_FATAL;
-			}
-
-			int tmpi = getFCBA_component_density(ich_gen, &desc, 0);
-			if (tmpi < 0) {
-				msg_perr("Could not determine density of flash component %d.\n", 0);
-				return ERROR_FATAL;
-			}
-			hwseq_data.size_comp0 = tmpi;
-
-			tmpi = getFCBA_component_density(ich_gen, &desc, 1);
-			if (tmpi < 0) {
-				msg_perr("Could not determine density of flash component %d.\n", 1);
-				return ERROR_FATAL;
-			}
-			hwseq_data.size_comp1 = tmpi;
-
-			register_opaque_master(&opaque_master_ich_hwseq);
+		if (ich_gen == CHIPSET_ICH8) {
+			tmp = mmio_readl(spibar + ICH8_REG_VSCC);
+			msg_pdbg("0x%x: 0x%08x (VSCC)\n", ICH8_REG_VSCC, tmp);
+			msg_pdbg("VSCC: ");
+			prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, true);
 		} else {
-			register_spi_master(&spi_master_ich9);
+			tmp = mmio_readl(spibar + ICH9_REG_LVSCC);
+			msg_pdbg("0x%x: 0x%08x (LVSCC)\n", ICH9_REG_LVSCC, tmp);
+			msg_pdbg("LVSCC: ");
+			prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, true);
+
+			tmp = mmio_readl(spibar + ICH9_REG_UVSCC);
+			msg_pdbg("0x%x: 0x%08x (UVSCC)\n", ICH9_REG_UVSCC, tmp);
+			msg_pdbg("UVSCC: ");
+			prettyprint_ich_reg_vscc(tmp, FLASHROM_MSG_DEBUG, false);
 		}
-		break;
+
+		switch (ich_gen) {
+		case CHIPSET_ICH8:
+		case CHIPSET_100_SERIES_SUNRISE_POINT:
+		case CHIPSET_C620_SERIES_LEWISBURG:
+		case CHIPSET_300_SERIES_CANNON_POINT:
+		case CHIPSET_400_SERIES_COMET_POINT:
+		case CHIPSET_500_SERIES_TIGER_POINT:
+		case CHIPSET_600_SERIES_ALDER_POINT:
+		case CHIPSET_METEOR_LAKE:
+		case CHIPSET_APOLLO_LAKE:
+		case CHIPSET_GEMINI_LAKE:
+		case CHIPSET_JASPER_LAKE:
+		case CHIPSET_ELKHART_LAKE:
+			break;
+		default:
+			tmp = mmio_readl(spibar + ICH9_REG_FPB);
+			msg_pdbg("0x%x: 0x%08x (FPB)\n", ICH9_REG_FPB, tmp);
+			break;
+		}
+
+		if (read_ich_descriptors_via_fdo(ich_gen, spibar, &desc) == ICH_RET_OK)
+			prettyprint_ich_descriptors(ich_gen, &desc);
+
+		/* If the descriptor is valid and indicates multiple
+		 * flash devices we need to use hwseq to be able to
+		 * access the second flash device.
+		 */
+		if (ich_spi_mode == ich_auto && desc.content.NC != 0) {
+			msg_pinfo("Enabling hardware sequencing due to multiple flash chips detected.\n");
+			ich_spi_mode = ich_hwseq;
+		}
+	}
+
+	if (ich_spi_mode == ich_auto && ichspi_lock &&
+	    ich_missing_opcodes()) {
+		msg_pinfo("Enabling hardware sequencing because "
+			  "some important opcode is locked.\n");
+		ich_spi_mode = ich_hwseq;
+	}
+
+	if (ich_spi_mode == ich_auto &&
+	    (ich_gen == CHIPSET_100_SERIES_SUNRISE_POINT ||
+	     ich_gen == CHIPSET_300_SERIES_CANNON_POINT ||
+	     ich_gen == CHIPSET_400_SERIES_COMET_POINT ||
+	     ich_gen == CHIPSET_500_SERIES_TIGER_POINT ||
+	     ich_gen == CHIPSET_600_SERIES_ALDER_POINT)) {
+		msg_pdbg("Enabling hardware sequencing by default for 100+ series PCH.\n");
+		ich_spi_mode = ich_hwseq;
+	}
+
+	if (ich_spi_mode == ich_auto &&
+	    (ich_gen == CHIPSET_APOLLO_LAKE ||
+	     ich_gen == CHIPSET_GEMINI_LAKE ||
+	     ich_gen == CHIPSET_JASPER_LAKE ||
+	     ich_gen == CHIPSET_ELKHART_LAKE ||
+	     ich_gen == CHIPSET_METEOR_LAKE)) {
+		msg_pdbg("Enabling hardware sequencing by default for Apollo/Gemini/Jasper/Elkhart/Meteor Lake.\n");
+		ich_spi_mode = ich_hwseq;
+	}
+
+	if (ich_spi_mode == ich_hwseq) {
+		if (!desc_valid) {
+			msg_perr("Hardware sequencing was requested "
+				 "but the flash descriptor is not valid. Aborting.\n");
+			return ERROR_FATAL;
+		}
+
+		int tmpi = getFCBA_component_density(ich_gen, &desc, 0);
+		if (tmpi < 0) {
+			msg_perr("Could not determine density of flash component %d.\n", 0);
+			return ERROR_FATAL;
+		}
+		g_hwseq_data.size_comp0 = tmpi;
+
+		tmpi = getFCBA_component_density(ich_gen, &desc, 1);
+		if (tmpi < 0) {
+			msg_perr("Could not determine density of flash component %d.\n", 1);
+			return ERROR_FATAL;
+		}
+		g_hwseq_data.size_comp1 = tmpi;
+
+		register_opaque_master(&opaque_master_ich_hwseq, &g_hwseq_data);
+	} else {
+		register_spi_master(&spi_master_ich9, NULL);
 	}
 
 	return 0;
 }
 
+int ich_init_spi(void *spibar, enum ich_chipset ich_gen)
+{
+	ich_generation = ich_gen;
+	ich_spibar = spibar;
+
+	switch (ich_gen) {
+	case CHIPSET_ICH7:
+	case CHIPSET_TUNNEL_CREEK:
+	case CHIPSET_CENTERTON:
+		return init_ich7_spi(spibar, ich_gen);
+	case CHIPSET_ICH8:
+	default:	/* Future version might behave the same */
+		return init_ich_default(spibar, ich_gen);
+	}
+}
+
 static const struct spi_master spi_master_via = {
-	.max_data_read = 16,
-	.max_data_write = 16,
-	.command = ich_spi_send_command,
-	.multicommand = ich_spi_send_multicommand,
-	.read = default_spi_read,
-	.write_256 = default_spi_write_256,
-	.write_aai = default_spi_write_aai,
+	.max_data_read	= 16,
+	.max_data_write	= 16,
+	.command	= ich_spi_send_command,
+	.multicommand	= ich_spi_send_multicommand,
+	.read		= default_spi_read,
+	.write_256	= default_spi_write_256,
+	.write_aai	= default_spi_write_aai,
+	.probe_opcode	= ich_spi_probe_opcode,
 };
 
 int via_init_spi(uint32_t mmio_base)
@@ -2077,33 +2251,31 @@ int via_init_spi(uint32_t mmio_base)
 	/* Not sure if it speaks all these bus protocols. */
 	internal_buses_supported &= BUS_LPC | BUS_FWH;
 	ich_generation = CHIPSET_ICH7;
-	register_spi_master(&spi_master_via);
+	register_spi_master(&spi_master_via, NULL);
 
-	msg_pdbg("0x00: 0x%04x     (SPIS)\n", mmio_readw(ich_spibar + 0));
-	msg_pdbg("0x02: 0x%04x     (SPIC)\n", mmio_readw(ich_spibar + 2));
-	msg_pdbg("0x04: 0x%08x (SPIA)\n", mmio_readl(ich_spibar + 4));
+	msg_pdbg("0x00: 0x%04x     (SPIS)\n",	mmio_readw(ich_spibar + 0));
+	msg_pdbg("0x02: 0x%04x     (SPIC)\n",	mmio_readw(ich_spibar + 2));
+	msg_pdbg("0x04: 0x%08x (SPIA)\n",	mmio_readl(ich_spibar + 4));
 	for (i = 0; i < 2; i++) {
 		int offs;
 		offs = 8 + (i * 8);
-		msg_pdbg("0x%02x: 0x%08x (SPID%d)\n", offs,
-			 mmio_readl(ich_spibar + offs), i);
+		msg_pdbg("0x%02x: 0x%08x (SPID%d)\n", offs, mmio_readl(ich_spibar + offs), i);
 		msg_pdbg("0x%02x: 0x%08x (SPID%d+4)\n", offs + 4,
 			 mmio_readl(ich_spibar + offs + 4), i);
 	}
 	ichspi_bbar = mmio_readl(ich_spibar + 0x50);
-	msg_pdbg("0x50: 0x%08x (BBAR)\n", ichspi_bbar);
-	msg_pdbg("0x54: 0x%04x     (PREOP)\n", mmio_readw(ich_spibar + 0x54));
-	msg_pdbg("0x56: 0x%04x     (OPTYPE)\n", mmio_readw(ich_spibar + 0x56));
-	msg_pdbg("0x58: 0x%08x (OPMENU)\n", mmio_readl(ich_spibar + 0x58));
-	msg_pdbg("0x5c: 0x%08x (OPMENU+4)\n", mmio_readl(ich_spibar + 0x5c));
+
+	msg_pdbg("0x50: 0x%08x (BBAR)\n",	ichspi_bbar);
+	msg_pdbg("0x54: 0x%04x     (PREOP)\n",	mmio_readw(ich_spibar + 0x54));
+	msg_pdbg("0x56: 0x%04x     (OPTYPE)\n",	mmio_readw(ich_spibar + 0x56));
+	msg_pdbg("0x58: 0x%08x (OPMENU)\n",	mmio_readl(ich_spibar + 0x58));
+	msg_pdbg("0x5c: 0x%08x (OPMENU+4)\n",	mmio_readl(ich_spibar + 0x5c));
 	for (i = 0; i < 3; i++) {
 		int offs;
 		offs = 0x60 + (i * 4);
-		msg_pdbg("0x%02x: 0x%08x (PBR%d)\n", offs,
-			 mmio_readl(ich_spibar + offs), i);
+		msg_pdbg("0x%02x: 0x%08x (PBR%d)\n", offs, mmio_readl(ich_spibar + offs), i);
 	}
-	msg_pdbg("0x6c: 0x%04x     (CLOCK/DEBUG)\n",
-		 mmio_readw(ich_spibar + 0x6c));
+	msg_pdbg("0x6c: 0x%04x     (CLOCK/DEBUG)\n", mmio_readw(ich_spibar + 0x6c));
 	if (mmio_readw(ich_spibar) & (1 << 15)) {
 		msg_pwarn("Warning: SPI Configuration Lockdown activated.\n");
 		ichspi_lock = 1;
@@ -2114,5 +2286,3 @@ int via_init_spi(uint32_t mmio_base)
 
 	return 0;
 }
-
-#endif

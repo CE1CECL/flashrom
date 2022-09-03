@@ -21,29 +21,22 @@
 
 #include <stdio.h>
 #include <sys/types.h>
-#ifndef __LIBPAYLOAD__
-#include <fcntl.h>
-#include <sys/stat.h>
-#endif
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <ctype.h>
-#include <getopt.h>
-#if HAVE_UTSNAME == 1
-#include <sys/utsname.h>
-#endif
+
 #include "flash.h"
 #include "flashchips.h"
 #include "programmer.h"
-#include "hwaccess.h"
+#include "hwaccess_physmap.h"
 #include "chipdrivers.h"
 
 const char flashrom_version[] = FLASHROM_VERSION;
 const char *chip_to_probe = NULL;
 
-static enum programmer programmer = PROGRAMMER_INVALID;
+static const struct programmer_entry *programmer = NULL;
 static const char *programmer_param = NULL;
 
 /*
@@ -57,484 +50,6 @@ unsigned long flashbase;
 
 /* Is writing allowed with this programmer? */
 int programmer_may_write;
-
-const struct programmer_entry programmer_table[] = {
-#if CONFIG_INTERNAL == 1
-	{
-		.name			= "internal",
-		.type			= OTHER,
-		.devs.note		= NULL,
-		.init			= internal_init,
-		.map_flash_region	= physmap,
-		.unmap_flash_region	= physunmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_DUMMY == 1
-	{
-		.name			= "dummy",
-		.type			= OTHER,
-					/* FIXME */
-		.devs.note		= "Dummy device, does nothing and logs all accesses\n",
-		.init			= dummy_init,
-		.map_flash_region	= dummy_map,
-		.unmap_flash_region	= dummy_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_MEC1308 == 1
-	{
-		.name			= "mec1308",
-		.type			= OTHER,
-		.devs.note		= "Microchip MEC1308 Embedded Controller.\n",
-		.init			= mec1308_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NIC3COM == 1
-	{
-		.name			= "nic3com",
-		.type			= PCI,
-		.devs.dev		= nics_3com,
-		.init			= nic3com_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NICREALTEK == 1
-	{
-		/* This programmer works for Realtek RTL8139 and SMC 1211. */
-		.name			= "nicrealtek",
-		.type			= PCI,
-		.devs.dev		= nics_realtek,
-		.init			= nicrealtek_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NICNATSEMI == 1
-	{
-		.name			= "nicnatsemi",
-		.type			= PCI,
-		.devs.dev		= nics_natsemi,
-		.init			= nicnatsemi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_GFXNVIDIA == 1
-	{
-		.name			= "gfxnvidia",
-		.type			= PCI,
-		.devs.dev		= gfx_nvidia,
-		.init			= gfxnvidia_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_RAIDEN == 1
-	{
-		.name			= "raiden_debug",
-		.type			= USB,
-		.devs.dev		= devs_raiden,
-		.init			= raiden_debug_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_DRKAISER == 1
-	{
-		.name			= "drkaiser",
-		.type			= PCI,
-		.devs.dev		= drkaiser_pcidev,
-		.init			= drkaiser_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_SATASII == 1
-	{
-		.name			= "satasii",
-		.type			= PCI,
-		.devs.dev		= satas_sii,
-		.init			= satasii_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_ATAHPT == 1
-	{
-		.name			= "atahpt",
-		.type			= PCI,
-		.devs.dev		= ata_hpt,
-		.init			= atahpt_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_ATAVIA == 1
-	{
-		.name			= "atavia",
-		.type			= PCI,
-		.devs.dev		= ata_via,
-		.init			= atavia_init,
-		.map_flash_region	= atavia_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_ATAPROMISE == 1
-	{
-		.name			= "atapromise",
-		.type			= PCI,
-		.devs.dev		= ata_promise,
-		.init			= atapromise_init,
-		.map_flash_region	= atapromise_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_IT8212 == 1
-	{
-		.name			= "it8212",
-		.type			= PCI,
-		.devs.dev		= devs_it8212,
-		.init			= it8212_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_FT2232_SPI == 1
-	{
-		.name			= "ft2232_spi",
-		.type			= USB,
-		.devs.dev		= devs_ft2232spi,
-		.init			= ft2232_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_SERPROG == 1
-	{
-		.name			= "serprog",
-		.type			= OTHER,
-					/* FIXME */
-		.devs.note		= "All programmer devices speaking the serprog protocol\n",
-		.init			= serprog_init,
-		.map_flash_region	= serprog_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= serprog_delay,
-	},
-#endif
-
-#if CONFIG_BUSPIRATE_SPI == 1
-	{
-		.name			= "buspirate_spi",
-		.type			= OTHER,
-					/* FIXME */
-		.devs.note		= "Dangerous Prototypes Bus Pirate\n",
-		.init			= buspirate_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_DEDIPROG == 1
-	{
-		.name			= "dediprog",
-		.type			= USB,
-		.devs.dev		= devs_dediprog,
-		.init			= dediprog_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_DEVELOPERBOX_SPI == 1
-	{
-		.name			= "developerbox",
-		.type			= USB,
-		.devs.dev		= devs_developerbox_spi,
-		.init			= developerbox_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_ENE_LPC == 1
-	{
-		.name			= "ene_lpc",
-		.type			= OTHER,
-		.devs.note		= "ENE LPC interface keyboard controller\n",
-		.init			= ene_lpc_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_RAYER_SPI == 1
-	{
-		.name			= "rayer_spi",
-		.type			= OTHER,
-					/* FIXME */
-		.devs.note		= "RayeR parallel port programmer\n",
-		.init			= rayer_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_PONY_SPI == 1
-	{
-		.name			= "pony_spi",
-		.type			= OTHER,
-					/* FIXME */
-		.devs.note		= "Programmers compatible with SI-Prog, serbang or AJAWe\n",
-		.init			= pony_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NICINTEL == 1
-	{
-		.name			= "nicintel",
-		.type			= PCI,
-		.devs.dev		= nics_intel,
-		.init			= nicintel_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NICINTEL_SPI == 1
-	{
-		.name			= "nicintel_spi",
-		.type			= PCI,
-		.devs.dev		= nics_intel_spi,
-		.init			= nicintel_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NICINTEL_EEPROM == 1
-	{
-		.name			= "nicintel_eeprom",
-		.type			= PCI,
-		.devs.dev		= nics_intel_ee,
-		.init			= nicintel_ee_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_OGP_SPI == 1
-	{
-		.name			= "ogp_spi",
-		.type			= PCI,
-		.devs.dev		= ogp_spi,
-		.init			= ogp_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_SATAMV == 1
-	{
-		.name			= "satamv",
-		.type			= PCI,
-		.devs.dev		= satas_mv,
-		.init			= satamv_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_LINUX_MTD == 1
-	{
-		.name			= "linux_mtd",
-		.type			= OTHER,
-		.devs.note		= "Device files /dev/mtd*\n",
-		.init			= linux_mtd_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_LINUX_SPI == 1
-	{
-		.name			= "linux_spi",
-		.type			= OTHER,
-		.devs.note		= "Device files /dev/spidev*.*\n",
-		.init			= linux_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_LSPCON_I2C_SPI == 1
-	{
-		.name			= "lspcon_i2c_spi",
-		.type			= OTHER,
-		.devs.note		= "Device files /dev/i2c-*.\n",
-		.init			= lspcon_i2c_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_REALTEK_MST_I2C_SPI == 1
-	{
-		.name			= "realtek_mst_i2c_spi",
-		.type			= OTHER,
-		.devs.note		= "Device files /dev/i2c-*.\n",
-		.init			= realtek_mst_i2c_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_USBBLASTER_SPI == 1
-	{
-		.name			= "usbblaster_spi",
-		.type			= USB,
-		.devs.dev		= devs_usbblasterspi,
-		.init			= usbblaster_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_MSTARDDC_SPI == 1
-	{
-		.name			= "mstarddc_spi",
-		.type			= OTHER,
-		.devs.note		= "MSTAR DDC devices addressable via /dev/i2c-* on Linux.\n",
-		.init			= mstarddc_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_PICKIT2_SPI == 1
-	{
-		.name			= "pickit2_spi",
-		.type			= USB,
-		.devs.dev		= devs_pickit2_spi,
-		.init			= pickit2_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_CH341A_SPI == 1
-	{
-		.name			= "ch341a_spi",
-		.type			= USB,
-		.devs.dev		= devs_ch341a_spi,
-		.init			= ch341a_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= ch341a_spi_delay,
-	},
-#endif
-
-#if CONFIG_DIGILENT_SPI == 1
-	{
-		.name			= "digilent_spi",
-		.type			= USB,
-		.devs.dev		= devs_digilent_spi,
-		.init			= digilent_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_JLINK_SPI == 1
-	{
-		.name			= "jlink_spi",
-		.type			= OTHER,
-		.init			= jlink_spi_init,
-		.devs.note		= "SEGGER J-Link and compatible devices\n",
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_NI845X_SPI == 1
-	{
-		.name			= "ni845x_spi",
-		.type			= OTHER, // choose other because NI-845x uses own USB implementation
-		.devs.note		= "National Instruments USB-845x\n",
-		.init			= ni845x_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-#if CONFIG_STLINKV3_SPI == 1
-	{
-		.name			= "stlinkv3_spi",
-		.type			= USB,
-		.devs.dev		= devs_stlinkv3_spi,
-		.init			= stlinkv3_spi_init,
-		.map_flash_region	= fallback_map,
-		.unmap_flash_region	= fallback_unmap,
-		.delay			= internal_delay,
-	},
-#endif
-
-	{0}, /* This entry corresponds to PROGRAMMER_INVALID. */
-};
 
 #define SHUTDOWN_MAXFN 32
 static int shutdown_fn_count = 0;
@@ -550,14 +65,6 @@ static int may_register_shutdown = 0;
 
 /* Did we change something or was every erase/write skipped (if any)? */
 static bool all_skipped = true;
-
-static int check_block_eraser(const struct flashctx *flash, int k, int log);
-
-int shutdown_free(void *data)
-{
-	free(data);
-	return 0;
-}
 
 /* Register a function to be executed on programmer shutdown.
  * The advantage over atexit() is that you can supply a void pointer which will
@@ -586,11 +93,39 @@ int register_shutdown(int (*function) (void *data), void *data)
 	return 0;
 }
 
-int programmer_init(enum programmer prog, const char *param)
+int register_chip_restore(chip_restore_fn_cb_t func,
+			  struct flashctx *flash, uint8_t status)
+{
+	if (flash->chip_restore_fn_count >= MAX_CHIP_RESTORE_FUNCTIONS) {
+		msg_perr("Tried to register more than %i chip restore"
+		         " functions.\n", MAX_CHIP_RESTORE_FUNCTIONS);
+		return 1;
+	}
+	flash->chip_restore_fn[flash->chip_restore_fn_count].func = func;
+	flash->chip_restore_fn[flash->chip_restore_fn_count].status = status;
+	flash->chip_restore_fn_count++;
+
+	return 0;
+}
+
+static int deregister_chip_restore(struct flashctx *flash)
+{
+	int rc = 0;
+
+	while (flash->chip_restore_fn_count > 0) {
+		int i = --flash->chip_restore_fn_count;
+		rc |= flash->chip_restore_fn[i].func(
+			flash, flash->chip_restore_fn[i].status);
+	}
+
+	return rc;
+}
+
+int programmer_init(const struct programmer_entry *prog, const char *param)
 {
 	int ret;
 
-	if (prog >= PROGRAMMER_INVALID) {
+	if (prog == NULL) {
 		msg_perr("Invalid programmer specified!\n");
 		return -1;
 	}
@@ -611,8 +146,8 @@ int programmer_init(enum programmer prog, const char *param)
 	programmer_may_write = 1;
 
 	programmer_param = param;
-	msg_pdbg("Initializing %s programmer\n", programmer_table[programmer].name);
-	ret = programmer_table[programmer].init();
+	msg_pdbg("Initializing %s programmer\n", programmer->name);
+	ret = programmer->init();
 	if (programmer_param && strlen(programmer_param)) {
 		if (ret != 0) {
 			/* It is quite possible that any unhandled programmer parameter would have been valid,
@@ -656,7 +191,7 @@ int programmer_shutdown(void)
 
 void *programmer_map_flash_region(const char *descr, uintptr_t phys_addr, size_t len)
 {
-	void *ret = programmer_table[programmer].map_flash_region(descr, phys_addr, len);
+	void *ret = programmer->map_flash_region(descr, phys_addr, len);
 	msg_gspew("%s: mapping %s from 0x%0*" PRIxPTR " to 0x%0*" PRIxPTR "\n",
 		  __func__, descr, PRIxPTR_WIDTH, phys_addr, PRIxPTR_WIDTH, (uintptr_t) ret);
 	return ret;
@@ -664,55 +199,14 @@ void *programmer_map_flash_region(const char *descr, uintptr_t phys_addr, size_t
 
 void programmer_unmap_flash_region(void *virt_addr, size_t len)
 {
-	programmer_table[programmer].unmap_flash_region(virt_addr, len);
+	programmer->unmap_flash_region(virt_addr, len);
 	msg_gspew("%s: unmapped 0x%0*" PRIxPTR "\n", __func__, PRIxPTR_WIDTH, (uintptr_t)virt_addr);
-}
-
-void chip_writeb(const struct flashctx *flash, uint8_t val, chipaddr addr)
-{
-	flash->mst->par.chip_writeb(flash, val, addr);
-}
-
-void chip_writew(const struct flashctx *flash, uint16_t val, chipaddr addr)
-{
-	flash->mst->par.chip_writew(flash, val, addr);
-}
-
-void chip_writel(const struct flashctx *flash, uint32_t val, chipaddr addr)
-{
-	flash->mst->par.chip_writel(flash, val, addr);
-}
-
-void chip_writen(const struct flashctx *flash, const uint8_t *buf, chipaddr addr, size_t len)
-{
-	flash->mst->par.chip_writen(flash, buf, addr, len);
-}
-
-uint8_t chip_readb(const struct flashctx *flash, const chipaddr addr)
-{
-	return flash->mst->par.chip_readb(flash, addr);
-}
-
-uint16_t chip_readw(const struct flashctx *flash, const chipaddr addr)
-{
-	return flash->mst->par.chip_readw(flash, addr);
-}
-
-uint32_t chip_readl(const struct flashctx *flash, const chipaddr addr)
-{
-	return flash->mst->par.chip_readl(flash, addr);
-}
-
-void chip_readn(const struct flashctx *flash, uint8_t *buf, chipaddr addr,
-		size_t len)
-{
-	flash->mst->par.chip_readn(flash, buf, addr, len);
 }
 
 void programmer_delay(unsigned int usecs)
 {
 	if (usecs > 0)
-		programmer_table[programmer].delay(usecs);
+		programmer->delay(usecs);
 }
 
 int read_memmapped(struct flashctx *flash, uint8_t *buf, unsigned int start,
@@ -728,7 +222,7 @@ int read_memmapped(struct flashctx *flash, uint8_t *buf, unsigned int start,
  * needle and remove everything from the first occurrence of needle to the next
  * delimiter from haystack.
  */
-char *extract_param(const char *const *haystack, const char *needle, const char *delim)
+static char *extract_param(const char *const *haystack, const char *needle, const char *delim)
 {
 	char *param_pos, *opt_pos, *rest;
 	char *opt = NULL;
@@ -784,9 +278,34 @@ char *extract_param(const char *const *haystack, const char *needle, const char 
 	return opt;
 }
 
-char *extract_programmer_param(const char *param_name)
+char *extract_programmer_param_str(const char *param_name)
 {
 	return extract_param(&programmer_param, param_name, ",");
+}
+
+static int check_block_eraser(const struct flashctx *flash, int k, int log)
+{
+	struct block_eraser eraser = flash->chip->block_erasers[k];
+
+	if (!eraser.block_erase && !eraser.eraseblocks[0].count) {
+		if (log)
+			msg_cdbg("not defined. ");
+		return 1;
+	}
+	if (!eraser.block_erase && eraser.eraseblocks[0].count) {
+		if (log)
+			msg_cdbg("eraseblock layout is known, but matching "
+				 "block erase function is not implemented. ");
+		return 1;
+	}
+	if (eraser.block_erase && !eraser.eraseblocks[0].count) {
+		if (log)
+			msg_cdbg("block erase function found, but "
+				 "eraseblock layout is not defined. ");
+		return 1;
+	}
+	// TODO: Once erase functions are annotated with allowed buses, check that as well.
+	return 0;
 }
 
 /* Returns the number of well-defined erasers for a chip. */
@@ -850,6 +369,13 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 	if (!len)
 		return -1;
 
+	if (start + len > flash->chip->total_size * 1024) {
+		msg_gerr("Error: %s called with start 0x%x + len 0x%x >"
+			" total_size 0x%x\n", __func__, start, len,
+			flash->chip->total_size * 1024);
+		return -1;
+	}
+
 	if (!flash->chip->read) {
 		msg_cerr("ERROR: flashrom has no read function for this flash chip.\n");
 		return -1;
@@ -860,17 +386,8 @@ int verify_range(struct flashctx *flash, const uint8_t *cmpbuf, unsigned int sta
 		msg_gerr("Could not allocate memory!\n");
 		return -1;
 	}
-	int ret = 0;
 
-	if (start + len > flash->chip->total_size * 1024) {
-		msg_gerr("Error: %s called with start 0x%x + len 0x%x >"
-			" total_size 0x%x\n", __func__, start, len,
-			flash->chip->total_size * 1024);
-		ret = -1;
-		goto out_free;
-	}
-
-	ret = flash->chip->read(flash, readbuf, start, len);
+	int ret = flash->chip->read(flash, readbuf, start, len);
 	if (ret) {
 		msg_gerr("Verification impossible because read failed "
 			 "at 0x%x (len 0x%x)\n", start, len);
@@ -916,7 +433,7 @@ static int need_erase_gran_bytes(const uint8_t *have, const uint8_t *want, unsig
  * @gran	write granularity (enum, not count)
  * @return      0 if no erase is needed, 1 otherwise
  */
-int need_erase(const uint8_t *have, const uint8_t *want, unsigned int len,
+static int need_erase(const uint8_t *have, const uint8_t *want, unsigned int len,
                enum write_granularity gran, const uint8_t erased_value)
 {
 	int result = 0;
@@ -1059,7 +576,7 @@ static unsigned int get_next_write(const uint8_t *have, const uint8_t *want, uns
 	return first_len;
 }
 
-/* Returns the number of busses commonly supported by the current programmer and flash chip where the latter
+/* Returns the number of buses commonly supported by the current programmer and flash chip where the latter
  * can not be completely accessed due to size/address limits of the programmer. */
 unsigned int count_max_decode_exceedings(const struct flashctx *flash)
 {
@@ -1212,12 +729,12 @@ int probe_flash(struct registered_master *mst, int startchip, struct flashctx *f
 		}
 
 		/* Start filling in the dynamic data. */
-		flash->chip = calloc(1, sizeof(struct flashchip));
+		flash->chip = calloc(1, sizeof(*flash->chip));
 		if (!flash->chip) {
 			msg_gerr("Out of memory!\n");
 			exit(1);
 		}
-		memcpy(flash->chip, chip, sizeof(struct flashchip));
+		*flash->chip = *chip;
 		flash->mst = mst;
 
 		if (map_flash(flash) != 0)
@@ -1278,30 +795,24 @@ notfound:
 	if (!flash->chip)
 		return -1;
 
-	/* Fill fallback layout covering the whole chip. */
-	struct single_layout *const fallback = &flash->fallback_layout;
-	fallback->base.entries		= &fallback->entry;
-	fallback->base.num_entries	= 1;
-	fallback->entry.start		= 0;
-	fallback->entry.end		= flash->chip->total_size * 1024 - 1;
-	fallback->entry.included	= true;
-	fallback->entry.name		= strdup("complete flash");
-	if (!fallback->entry.name) {
-		msg_cerr("Failed to probe chip: %s\n", strerror(errno));
-		return -1;
-	}
+	/* Fill default layout covering the whole chip. */
+	if (flashrom_layout_new(&flash->default_layout) ||
+	    flashrom_layout_add_region(flash->default_layout,
+			0, flash->chip->total_size * 1024 - 1, "complete flash") ||
+	    flashrom_layout_include_region(flash->default_layout, "complete flash"))
+	        return -1;
 
 	tmp = flashbuses_to_text(flash->chip->bustype);
 	msg_cinfo("%s %s flash chip \"%s\" (%d kB, %s) ", force ? "Assuming" : "Found",
 		  flash->chip->vendor, flash->chip->name, flash->chip->total_size, tmp);
 	free(tmp);
 #if CONFIG_INTERNAL == 1
-	if (programmer_table[programmer].map_flash_region == physmap)
+	if (programmer->map_flash_region == physmap)
 		msg_cinfo("mapped at physical address 0x%0*" PRIxPTR ".\n",
 			  PRIxPTR_WIDTH, flash->physical_memory);
 	else
 #endif
-		msg_cinfo("on %s.\n", programmer_table[programmer].name);
+		msg_cinfo("on %s.\n", programmer->name);
 
 	/* Flash registers may more likely not be mapped if the chip was forced.
 	 * Lock info may be stored in registers, so avoid lock info printing. */
@@ -1316,127 +827,30 @@ notfound:
 	return chip - flashchips;
 }
 
-int read_buf_from_file(unsigned char *buf, unsigned long size,
-		       const char *filename)
+/**
+ * @brief Reads the included layout regions into a buffer.
+ *
+ * If there is no layout set in the given flash context, the whole chip will
+ * be read.
+ *
+ * @param flashctx Flash context to be used.
+ * @param buffer   Buffer of full chip size to read into.
+ * @return 0 on success,
+ *	   1 if any read fails.
+ */
+static int read_by_layout(struct flashctx *const flashctx, uint8_t *const buffer)
 {
-#ifdef __LIBPAYLOAD__
-	msg_gerr("Error: No file I/O support in libpayload\n");
-	return 1;
-#else
-	int ret = 0;
+	const struct flashrom_layout *const layout = get_layout(flashctx);
+	const struct romentry *entry = NULL;
 
-	FILE *image;
-	if ((image = fopen(filename, "rb")) == NULL) {
-		msg_gerr("Error: opening file \"%s\" failed: %s\n", filename, strerror(errno));
-		return 1;
-	}
+	while ((entry = layout_next_included(layout, entry))) {
+		const chipoff_t region_start	= entry->start;
+		const chipsize_t region_len	= entry->end - entry->start + 1;
 
-	struct stat image_stat;
-	if (fstat(fileno(image), &image_stat) != 0) {
-		msg_gerr("Error: getting metadata of file \"%s\" failed: %s\n", filename, strerror(errno));
-		ret = 1;
-		goto out;
+		if (flashctx->chip->read(flashctx, buffer + region_start, region_start, region_len))
+			return 1;
 	}
-	if (image_stat.st_size != (intmax_t)size) {
-		msg_gerr("Error: Image size (%jd B) doesn't match the flash chip's size (%lu B)!\n",
-			 (intmax_t)image_stat.st_size, size);
-		ret = 1;
-		goto out;
-	}
-
-	unsigned long numbytes = fread(buf, 1, size, image);
-	if (numbytes != size) {
-		msg_gerr("Error: Failed to read complete file. Got %ld bytes, "
-			 "wanted %ld!\n", numbytes, size);
-		ret = 1;
-	}
-out:
-	(void)fclose(image);
-	return ret;
-#endif
-}
-
-int write_buf_to_file(const unsigned char *buf, unsigned long size, const char *filename)
-{
-#ifdef __LIBPAYLOAD__
-	msg_gerr("Error: No file I/O support in libpayload\n");
-	return 1;
-#else
-	FILE *image;
-	int ret = 0;
-
-	if (!filename) {
-		msg_gerr("No filename specified.\n");
-		return 1;
-	}
-	if ((image = fopen(filename, "wb")) == NULL) {
-		msg_gerr("Error: opening file \"%s\" failed: %s\n", filename, strerror(errno));
-		return 1;
-	}
-
-	unsigned long numbytes = fwrite(buf, 1, size, image);
-	if (numbytes != size) {
-		msg_gerr("Error: file %s could not be written completely.\n", filename);
-		ret = 1;
-		goto out;
-	}
-	if (fflush(image)) {
-		msg_gerr("Error: flushing file \"%s\" failed: %s\n", filename, strerror(errno));
-		ret = 1;
-	}
-	// Try to fsync() only regular files and if that function is available at all (e.g. not on MinGW).
-#if defined(_POSIX_FSYNC) && (_POSIX_FSYNC != -1)
-	struct stat image_stat;
-	if (fstat(fileno(image), &image_stat) != 0) {
-		msg_gerr("Error: getting metadata of file \"%s\" failed: %s\n", filename, strerror(errno));
-		ret = 1;
-		goto out;
-	}
-	if (S_ISREG(image_stat.st_mode)) {
-		if (fsync(fileno(image))) {
-			msg_gerr("Error: fsyncing file \"%s\" failed: %s\n", filename, strerror(errno));
-			ret = 1;
-		}
-	}
-#endif
-out:
-	if (fclose(image)) {
-		msg_gerr("Error: closing file \"%s\" failed: %s\n", filename, strerror(errno));
-		ret = 1;
-	}
-	return ret;
-#endif
-}
-
-static int read_by_layout(struct flashctx *, uint8_t *);
-int read_flash_to_file(struct flashctx *flash, const char *filename)
-{
-	unsigned long size = flash->chip->total_size * 1024;
-	unsigned char *buf = calloc(size, sizeof(unsigned char));
-	int ret = 0;
-
-	msg_cinfo("Reading flash... ");
-	if (!buf) {
-		msg_gerr("Memory allocation failed!\n");
-		msg_cinfo("FAILED.\n");
-		return 1;
-	}
-	if (!flash->chip->read) {
-		msg_cerr("No read function available for this flash chip.\n");
-		ret = 1;
-		goto out_free;
-	}
-	if (read_by_layout(flash, buf)) {
-		msg_cerr("Read operation failed!\n");
-		ret = 1;
-		goto out_free;
-	}
-
-	ret = write_buf_to_file(buf, size, filename);
-out_free:
-	free(buf);
-	msg_cinfo("%s.\n", ret ? "FAILED" : "done");
-	return ret;
+	return 0;
 }
 
 /* Even if an error is found, the function will keep going and check the rest. */
@@ -1444,10 +858,12 @@ static int selfcheck_eraseblocks(const struct flashchip *chip)
 {
 	int i, j, k;
 	int ret = 0;
+	unsigned int prev_eraseblock_count = chip->total_size * 1024;
 
 	for (k = 0; k < NUM_ERASEFUNCTIONS; k++) {
 		unsigned int done = 0;
 		struct block_eraser eraser = chip->block_erasers[k];
+		unsigned int curr_eraseblock_count = 0;
 
 		for (i = 0; i < NUM_ERASEREGIONS; i++) {
 			/* Blocks with zero size are bugs in flashchips.c. */
@@ -1470,6 +886,7 @@ static int selfcheck_eraseblocks(const struct flashchip *chip)
 			}
 			done += eraser.eraseblocks[i].count *
 				eraser.eraseblocks[i].size;
+			curr_eraseblock_count += eraser.eraseblocks[i].count;
 		}
 		/* Empty eraseblock definition with erase function.  */
 		if (!done && eraser.block_erase)
@@ -1501,59 +918,16 @@ static int selfcheck_eraseblocks(const struct flashchip *chip)
 				ret = 1;
 			}
 		}
+		if(curr_eraseblock_count > prev_eraseblock_count)
+		{
+			msg_gerr("ERROR: Flash chip %s erase function %i is not "
+					"in order. Please report a bug at flashrom@flashrom.org\n",
+					chip->name, k);
+			ret = 1;
+		}
+		prev_eraseblock_count = curr_eraseblock_count;
 	}
 	return ret;
-}
-
-static int check_block_eraser(const struct flashctx *flash, int k, int log)
-{
-	struct block_eraser eraser = flash->chip->block_erasers[k];
-
-	if (!eraser.block_erase && !eraser.eraseblocks[0].count) {
-		if (log)
-			msg_cdbg("not defined. ");
-		return 1;
-	}
-	if (!eraser.block_erase && eraser.eraseblocks[0].count) {
-		if (log)
-			msg_cdbg("eraseblock layout is known, but matching "
-				 "block erase function is not implemented. ");
-		return 1;
-	}
-	if (eraser.block_erase && !eraser.eraseblocks[0].count) {
-		if (log)
-			msg_cdbg("block erase function found, but "
-				 "eraseblock layout is not defined. ");
-		return 1;
-	}
-	// TODO: Once erase functions are annotated with allowed buses, check that as well.
-	return 0;
-}
-
-/**
- * @brief Reads the included layout regions into a buffer.
- *
- * If there is no layout set in the given flash context, the whole chip will
- * be read.
- *
- * @param flashctx Flash context to be used.
- * @param buffer   Buffer of full chip size to read into.
- * @return 0 on success,
- *	   1 if any read fails.
- */
-static int read_by_layout(struct flashctx *const flashctx, uint8_t *const buffer)
-{
-	const struct flashrom_layout *const layout = get_layout(flashctx);
-	const struct romentry *entry = NULL;
-
-	while ((entry = layout_next_included(layout, entry))) {
-		const chipoff_t region_start	= entry->start;
-		const chipsize_t region_len	= entry->end - entry->start + 1;
-
-		if (flashctx->chip->read(flashctx, buffer + region_start, region_start, region_len))
-			return 1;
-	}
-	return 0;
 }
 
 typedef int (*erasefn_t)(struct flashctx *, unsigned int addr, unsigned int len);
@@ -1760,7 +1134,6 @@ _free_ret:
  * be erased.
  *
  * @param flashctx Flash context to be used.
- * @param buffer   Buffer of full chip size to read into.
  * @return 0 on success,
  *	   1 if all available erase functions failed.
  */
@@ -1893,16 +1266,18 @@ static int write_by_layout(struct flashctx *const flashctx,
  * contents will be compared.
  *
  * @param flashctx    Flash context to be used.
+ * @param layout      Flash layout information.
  * @param curcontents A buffer of full chip size to read current chip contents into.
  * @param newcontents The new image to compare to.
  * @return 0 on success,
  *	   1 if reading failed,
  *	   3 if the contents don't match.
  */
-static int verify_by_layout(struct flashctx *const flashctx,
-			    void *const curcontents, const uint8_t *const newcontents)
+static int verify_by_layout(
+		struct flashctx *const flashctx,
+		const struct flashrom_layout *const layout,
+		void *const curcontents, const uint8_t *const newcontents)
 {
-	const struct flashrom_layout *const layout = get_layout(flashctx);
 	const struct romentry *entry = NULL;
 
 	while ((entry = layout_next_included(layout, entry))) {
@@ -1922,33 +1297,33 @@ static void nonfatal_help_message(void)
 {
 	msg_gerr("Good, writing to the flash chip apparently didn't do anything.\n");
 #if CONFIG_INTERNAL == 1
-	if (programmer == PROGRAMMER_INTERNAL)
+	if (programmer == &programmer_internal)
 		msg_gerr("This means we have to add special support for your board, programmer or flash\n"
-			 "chip. Please report this on IRC at chat.freenode.net (channel #flashrom) or\n"
-			 "mail flashrom@flashrom.org, thanks!\n"
+			 "chip. Please report this to the mailing list at flashrom@flashrom.org or on\n"
+			 "IRC (see https://www.flashrom.org/Contact for details), thanks!\n"
 			 "-------------------------------------------------------------------------------\n"
 			 "You may now reboot or simply leave the machine running.\n");
 	else
 #endif
 		msg_gerr("Please check the connections (especially those to write protection pins) between\n"
 			 "the programmer and the flash chip. If you think the error is caused by flashrom\n"
-			 "please report this on IRC at chat.freenode.net (channel #flashrom) or\n"
-			 "mail flashrom@flashrom.org, thanks!\n");
+			 "please report this to the mailing list at flashrom@flashrom.org or on IRC (see\n"
+			 "https://www.flashrom.org/Contact for details), thanks!\n");
 }
 
-static void emergency_help_message(void)
+void emergency_help_message(void)
 {
 	msg_gerr("Your flash chip is in an unknown state.\n");
 #if CONFIG_INTERNAL == 1
-	if (programmer == PROGRAMMER_INTERNAL)
-		msg_gerr("Get help on IRC at chat.freenode.net (channel #flashrom) or\n"
-			"mail flashrom@flashrom.org with the subject \"FAILED: <your board name>\"!\n"
+	if (programmer == &programmer_internal)
+		msg_gerr("Get help on IRC (see https://www.flashrom.org/Contact) or mail\n"
+			"flashrom@flashrom.org with the subject \"FAILED: <your board name>\"!"
 			"-------------------------------------------------------------------------------\n"
 			"DO NOT REBOOT OR POWEROFF!\n");
 	else
 #endif
-		msg_gerr("Please report this on IRC at chat.freenode.net (channel #flashrom) or\n"
-			 "mail flashrom@flashrom.org, thanks!\n");
+		msg_gerr("Please report this to the mailing list at flashrom@flashrom.org or\n"
+			 "on IRC (see https://www.flashrom.org/Contact for details), thanks!\n");
 }
 
 void list_programmers_linebreak(int startcol, int cols, int paren)
@@ -1956,11 +1331,11 @@ void list_programmers_linebreak(int startcol, int cols, int paren)
 	const char *pname;
 	int pnamelen;
 	int remaining = 0, firstline = 1;
-	enum programmer p;
+	size_t p;
 	int i;
 
-	for (p = 0; p < PROGRAMMER_INVALID; p++) {
-		pname = programmer_table[p].name;
+	for (p = 0; p < programmer_table_size; p++) {
+		pname = programmer_table[p]->name;
 		pnamelen = strlen(pname);
 		if (remaining - pnamelen - 2 < 0) {
 			if (firstline)
@@ -1980,7 +1355,7 @@ void list_programmers_linebreak(int startcol, int cols, int paren)
 		}
 		msg_ginfo("%s", pname);
 		remaining -= pnamelen;
-		if (p < PROGRAMMER_INVALID - 1) {
+		if (p < programmer_table_size - 1) {
 			msg_ginfo(",");
 			remaining--;
 		} else {
@@ -1990,147 +1365,56 @@ void list_programmers_linebreak(int startcol, int cols, int paren)
 	}
 }
 
-static void print_sysinfo(void)
-{
-#if IS_WINDOWS
-	SYSTEM_INFO si;
-	OSVERSIONINFOEX osvi;
-
-	memset(&si, 0, sizeof(SYSTEM_INFO));
-	memset(&osvi, 0, sizeof(OSVERSIONINFOEX));
-	msg_ginfo(" on Windows");
-	/* Tell Windows which version of the structure we want. */
-	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-	if (GetVersionEx((OSVERSIONINFO*) &osvi))
-		msg_ginfo(" %lu.%lu", osvi.dwMajorVersion, osvi.dwMinorVersion);
-	else
-		msg_ginfo(" unknown version");
-	GetSystemInfo(&si);
-	switch (si.wProcessorArchitecture) {
-	case PROCESSOR_ARCHITECTURE_AMD64:
-		msg_ginfo(" (x86_64)");
-		break;
-	case PROCESSOR_ARCHITECTURE_INTEL:
-		msg_ginfo(" (x86)");
-		break;
-	default:
-		msg_ginfo(" (unknown arch)");
-		break;
-	}
-#elif HAVE_UTSNAME == 1
-	struct utsname osinfo;
-
-	uname(&osinfo);
-	msg_ginfo(" on %s %s (%s)", osinfo.sysname, osinfo.release,
-		  osinfo.machine);
-#else
-	msg_ginfo(" on unknown machine");
-#endif
-}
-
-void print_buildinfo(void)
-{
-	msg_gdbg("flashrom was built with");
-#if NEED_PCI == 1
-#ifdef PCILIB_VERSION
-	msg_gdbg(" libpci %s,", PCILIB_VERSION);
-#else
-	msg_gdbg(" unknown PCI library,");
-#endif
-#endif
-#ifdef __clang__
-	msg_gdbg(" LLVM Clang");
-#ifdef __clang_version__
-	msg_gdbg(" %s,", __clang_version__);
-#else
-	msg_gdbg(" unknown version (before r102686),");
-#endif
-#elif defined(__GNUC__)
-	msg_gdbg(" GCC");
-#ifdef __VERSION__
-	msg_gdbg(" %s,", __VERSION__);
-#else
-	msg_gdbg(" unknown version,");
-#endif
-#else
-	msg_gdbg(" unknown compiler,");
-#endif
-#if defined (__FLASHROM_LITTLE_ENDIAN__)
-	msg_gdbg(" little endian");
-#elif defined (__FLASHROM_BIG_ENDIAN__)
-	msg_gdbg(" big endian");
-#else
-#error Endianness could not be determined
-#endif
-	msg_gdbg("\n");
-}
-
-void print_version(void)
-{
-	msg_ginfo("flashrom %s", flashrom_version);
-	print_sysinfo();
-	msg_ginfo("\n");
-}
-
-void print_banner(void)
-{
-	msg_ginfo("flashrom is free software, get the source code at "
-		  "https://flashrom.org\n");
-	msg_ginfo("\n");
-}
-
 int selfcheck(void)
 {
 	unsigned int i;
 	int ret = 0;
 
-	/* Safety check. Instead of aborting after the first error, check
-	 * if more errors exist.
-	 */
-	if (ARRAY_SIZE(programmer_table) - 1 != PROGRAMMER_INVALID) {
-		msg_gerr("Programmer table miscompilation!\n");
-		ret = 1;
-	}
-	for (i = 0; i < PROGRAMMER_INVALID; i++) {
-		const struct programmer_entry p = programmer_table[i];
-		if (p.name == NULL) {
+	for (i = 0; i < programmer_table_size; i++) {
+		const struct programmer_entry *const p = programmer_table[i];
+		if (p == NULL) {
+			msg_gerr("Programmer with index %d is NULL instead of a valid pointer!\n", i);
+			ret = 1;
+			continue;
+		}
+		if (p->name == NULL) {
 			msg_gerr("All programmers need a valid name, but the one with index %d does not!\n", i);
 			ret = 1;
 			/* This might hide other problems with this programmer, but allows for better error
 			 * messages below without jumping through hoops. */
 			continue;
 		}
-		switch (p.type) {
+		switch (p->type) {
 		case USB:
 		case PCI:
 		case OTHER:
-			if (p.devs.note == NULL) {
-				if (strcmp("internal", p.name) == 0)
+			if (p->devs.note == NULL) {
+				if (strcmp("internal", p->name) == 0)
 					break; /* This one has its device list stored separately. */
 				msg_gerr("Programmer %s has neither a device list nor a textual description!\n",
-					 p.name);
+					 p->name);
 				ret = 1;
 			}
 			break;
 		default:
-			msg_gerr("Programmer %s does not have a valid type set!\n", p.name);
+			msg_gerr("Programmer %s does not have a valid type set!\n", p->name);
 			ret = 1;
 			break;
 		}
-		if (p.init == NULL) {
-			msg_gerr("Programmer %s does not have a valid init function!\n", p.name);
+		if (p->init == NULL) {
+			msg_gerr("Programmer %s does not have a valid init function!\n", p->name);
 			ret = 1;
 		}
-		if (p.delay == NULL) {
-			msg_gerr("Programmer %s does not have a valid delay function!\n", p.name);
+		if (p->delay == NULL) {
+			msg_gerr("Programmer %s does not have a valid delay function!\n", p->name);
 			ret = 1;
 		}
-		if (p.map_flash_region == NULL) {
-			msg_gerr("Programmer %s does not have a valid map_flash_region function!\n", p.name);
+		if (p->map_flash_region == NULL) {
+			msg_gerr("Programmer %s does not have a valid map_flash_region function!\n", p->name);
 			ret = 1;
 		}
-		if (p.unmap_flash_region == NULL) {
-			msg_gerr("Programmer %s does not have a valid unmap_flash_region function!\n", p.name);
+		if (p->unmap_flash_region == NULL) {
+			msg_gerr("Programmer %s does not have a valid unmap_flash_region function!\n", p->name);
 			ret = 1;
 		}
 	}
@@ -2167,8 +1451,8 @@ int selfcheck(void)
 	return ret;
 }
 
-/* FIXME: This function signature needs to be improved once doit() has a better
- * function signature.
+/* FIXME: This function signature needs to be improved once prepare_flash_access()
+ * has a better function signature.
  */
 static int chip_safety_check(const struct flashctx *flash, int force,
 			     int read_it, int write_it, int erase_it, int verify_it)
@@ -2247,13 +1531,16 @@ int prepare_flash_access(struct flashctx *const flash,
 		return 1;
 	}
 
-	if (flash->layout == get_global_layout() && normalize_romentries(flash)) {
+	if (layout_sanity_checks(flash)) {
 		msg_cerr("Requested regions can not be handled. Aborting.\n");
 		return 1;
 	}
 
 	if (map_flash(flash) != 0)
 		return 1;
+
+	/* Initialize chip_restore_fn_count before chip unlock calls. */
+	flash->chip_restore_fn_count = 0;
 
 	/* Given the existence of read locks, we want to unlock for read,
 	   erase and write. */
@@ -2291,23 +1578,10 @@ int prepare_flash_access(struct flashctx *const flash,
 
 void finalize_flash_access(struct flashctx *const flash)
 {
+	deregister_chip_restore(flash);
 	unmap_flash(flash);
 }
 
-/**
- * @addtogroup flashrom-flash
- * @{
- */
-
-/**
- * @brief Erase the specified ROM chip.
- *
- * If a layout is set in the given flash context, only included regions
- * will be erased.
- *
- * @param flashctx The context of the flash chip to erase.
- * @return 0 on success.
- */
 int flashrom_flash_erase(struct flashctx *const flashctx)
 {
 	if (prepare_flash_access(flashctx, false, false, true, false))
@@ -2320,26 +1594,6 @@ int flashrom_flash_erase(struct flashctx *const flashctx)
 	return ret;
 }
 
-/** @} */ /* end flashrom-flash */
-
-/**
- * @defgroup flashrom-ops Operations
- * @{
- */
-
-/**
- * @brief Read the current image from the specified ROM chip.
- *
- * If a layout is set in the specified flash context, only included regions
- * will be read.
- *
- * @param flashctx The context of the flash chip.
- * @param buffer Target buffer to write image to.
- * @param buffer_len Size of target buffer in bytes.
- * @return 0 on success,
- *         2 if buffer_len is too short for the flash chip's contents,
- *         or 1 on any other failure.
- */
 int flashrom_image_read(struct flashctx *const flashctx, void *const buffer, const size_t buffer_len)
 {
 	const size_t flash_size = flashctx->chip->total_size * 1024;
@@ -2389,28 +1643,14 @@ static void combine_image_by_layout(const struct flashctx *const flashctx,
 	memcpy(newcontents + start, oldcontents + start, copy_len);
 }
 
-/**
- * @brief Write the specified image to the ROM chip.
- *
- * If a layout is set in the specified flash context, only erase blocks
- * containing included regions will be touched.
- *
- * @param flashctx The context of the flash chip.
- * @param buffer Source buffer to read image from (may be altered for full verification).
- * @param buffer_len Size of source buffer in bytes.
- * @param refbuffer If given, assume flash chip contains same data as `refbuffer`.
- * @return 0 on success,
- *         4 if buffer_len doesn't match the size of the flash chip,
- *         3 if write was tried but nothing has changed,
- *         2 if write failed and flash contents changed,
- *         or 1 on any other failure.
- */
 int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, const size_t buffer_len,
                          const void *const refbuffer)
 {
 	const size_t flash_size = flashctx->chip->total_size * 1024;
 	const bool verify_all = flashctx->flags.verify_whole_chip;
 	const bool verify = flashctx->flags.verify_after_write;
+	const struct flashrom_layout *const verify_layout =
+		verify_all ? get_default_layout(flashctx) : get_layout(flashctx);
 
 	if (buffer_len != flash_size)
 		return 4;
@@ -2429,7 +1669,7 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 	}
 
 #if CONFIG_INTERNAL == 1
-	if (programmer == PROGRAMMER_INTERNAL && cb_check_image(newcontents, flash_size) < 0) {
+	if (programmer == &programmer_internal && cb_check_image(newcontents, flash_size) < 0) {
 		if (flashctx->flags.force_boardmismatch) {
 			msg_pinfo("Proceeding anyway because user forced us to.\n");
 		} else {
@@ -2499,19 +1739,14 @@ int flashrom_image_write(struct flashctx *const flashctx, void *const buffer, co
 
 	/* Verify only if we actually changed something. */
 	if (verify && !all_skipped) {
-		const struct flashrom_layout *const layout_bak = flashctx->layout;
-
 		msg_cinfo("Verifying flash... ");
 
 		/* Work around chips which need some time to calm down. */
 		programmer_delay(1000*1000);
 
-		if (verify_all) {
+		if (verify_all)
 			combine_image_by_layout(flashctx, newcontents, oldcontents);
-			flashctx->layout = NULL;
-		}
-		ret = verify_by_layout(flashctx, curcontents, newcontents);
-		flashctx->layout = layout_bak;
+		ret = verify_by_layout(flashctx, verify_layout, curcontents, newcontents);
 		/* If we tried to write, and verification now fails, we
 		   might have an emergency situation. */
 		if (ret)
@@ -2531,22 +1766,9 @@ _free_ret:
 	return ret;
 }
 
-/**
- * @brief Verify the ROM chip's contents with the specified image.
- *
- * If a layout is set in the specified flash context, only included regions
- * will be verified.
- *
- * @param flashctx The context of the flash chip.
- * @param buffer Source buffer to verify with.
- * @param buffer_len Size of source buffer in bytes.
- * @return 0 on success,
- *         3 if the chip's contents don't match,
- *         2 if buffer_len doesn't match the size of the flash chip,
- *         or 1 on any other failure.
- */
 int flashrom_image_verify(struct flashctx *const flashctx, const void *const buffer, const size_t buffer_len)
 {
+	const struct flashrom_layout *const layout = get_layout(flashctx);
 	const size_t flash_size = flashctx->chip->total_size * 1024;
 
 	if (buffer_len != flash_size)
@@ -2565,93 +1787,12 @@ int flashrom_image_verify(struct flashctx *const flashctx, const void *const buf
 		goto _free_ret;
 
 	msg_cinfo("Verifying flash... ");
-	ret = verify_by_layout(flashctx, curcontents, newcontents);
+	ret = verify_by_layout(flashctx, layout, curcontents, newcontents);
 	if (!ret)
 		msg_cinfo("VERIFIED.\n");
 
 	finalize_flash_access(flashctx);
 _free_ret:
 	free(curcontents);
-	return ret;
-}
-
-/** @} */ /* end flashrom-ops */
-
-int do_read(struct flashctx *const flash, const char *const filename)
-{
-	if (prepare_flash_access(flash, true, false, false, false))
-		return 1;
-
-	const int ret = read_flash_to_file(flash, filename);
-
-	finalize_flash_access(flash);
-
-	return ret;
-}
-
-int do_erase(struct flashctx *const flash)
-{
-	const int ret = flashrom_flash_erase(flash);
-
-	/*
-	 * FIXME: Do we really want the scary warning if erase failed?
-	 * After all, after erase the chip is either blank or partially
-	 * blank or it has the old contents. A blank chip won't boot,
-	 * so if the user wanted erase and reboots afterwards, the user
-	 * knows very well that booting won't work.
-	 */
-	if (ret)
-		emergency_help_message();
-
-	return ret;
-}
-
-int do_write(struct flashctx *const flash, const char *const filename, const char *const referencefile)
-{
-	const size_t flash_size = flash->chip->total_size * 1024;
-	int ret = 1;
-
-	uint8_t *const newcontents = malloc(flash_size);
-	uint8_t *const refcontents = referencefile ? malloc(flash_size) : NULL;
-
-	if (!newcontents || (referencefile && !refcontents)) {
-		msg_gerr("Out of memory!\n");
-		goto _free_ret;
-	}
-
-	if (read_buf_from_file(newcontents, flash_size, filename))
-		goto _free_ret;
-
-	if (referencefile) {
-		if (read_buf_from_file(refcontents, flash_size, referencefile))
-			goto _free_ret;
-	}
-
-	ret = flashrom_image_write(flash, newcontents, flash_size, refcontents);
-
-_free_ret:
-	free(refcontents);
-	free(newcontents);
-	return ret;
-}
-
-int do_verify(struct flashctx *const flash, const char *const filename)
-{
-	const size_t flash_size = flash->chip->total_size * 1024;
-	int ret = 1;
-
-	uint8_t *const newcontents = malloc(flash_size);
-	if (!newcontents) {
-		msg_gerr("Out of memory!\n");
-		goto _free_ret;
-	}
-
-	if (read_buf_from_file(newcontents, flash_size, filename))
-		goto _free_ret;
-
-	ret = flashrom_image_verify(flash, newcontents, flash_size);
-
-_free_ret:
-	free(newcontents);
 	return ret;
 }

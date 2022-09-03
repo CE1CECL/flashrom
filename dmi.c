@@ -30,8 +30,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "platform.h"
 #include "flash.h"
+#include "hwaccess_physmap.h"
 #include "programmer.h"
 
 /* Enable SMBIOS decoding. Currently legacy DMI decoding is enough. */
@@ -40,7 +40,12 @@
 /* Strings longer than 4096 in DMI are just insane. */
 #define DMI_MAX_ANSWER_LEN 4096
 
-int has_dmi_support = 0;
+static bool g_has_dmi_support = false;
+
+bool dmi_is_supported(void)
+{
+	return g_has_dmi_support;
+}
 
 static struct {
 	const char *const keyword;
@@ -164,7 +169,7 @@ static void dmi_table(uint32_t base, uint16_t len, uint16_t num)
 	unsigned int i = 0, j = 0;
 
 	uint8_t *dmi_table_mem = physmap_ro("DMI Table", base, len);
-	if (dmi_table_mem == NULL) {
+	if (dmi_table_mem == ERROR_PTR) {
 		msg_perr("Unable to access DMI Table\n");
 		return;
 	}
@@ -182,7 +187,7 @@ static void dmi_table(uint32_t base, uint16_t len, uint16_t num)
 		 *   is invalid, but we cannot reliably locate the next entry.
 		 * - If the length value indicates that this structure spreads
 		 *   across the table border, something is fishy too.
-		 * Better stop at this point, and let the user know his/her
+		 * Better stop at this point, and let the user know their
 		 * table is broken.
 		 */
 		if (data[1] < 4 || data + data[1] >= limit) {
@@ -381,6 +386,7 @@ static int dmi_shutdown(void *data)
 		free(dmi_strings[i].value);
 		dmi_strings[i].value = NULL;
 	}
+	g_has_dmi_support = false;
 	return 0;
 }
 
@@ -405,7 +411,7 @@ void dmi_init(void)
 		break;
 	}
 
-	has_dmi_support = 1;
+	g_has_dmi_support = true;
 	unsigned int i;
 	for (i = 0; i < ARRAY_SIZE(dmi_strings); i++) {
 		msg_pdbg("DMI string %s: \"%s\"\n", dmi_strings[i].keyword,
@@ -465,7 +471,7 @@ int dmi_match(const char *pattern)
 {
 	unsigned int i;
 
-	if (!has_dmi_support)
+	if (!dmi_is_supported())
 		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(dmi_strings); i++) {

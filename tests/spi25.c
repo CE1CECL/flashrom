@@ -15,26 +15,12 @@
 
 #include <include/test.h>
 
+#include "wraps.h"
+#include "tests.h"
 #include "programmer.h"
 #include "flashchips.h"
 #include "chipdrivers.h"
 #include "spi.h"
-
-int __wrap_spi_send_command(const struct flashctx *flash,
-		unsigned int writecnt, unsigned int readcnt,
-		const unsigned char *writearr, unsigned char *readarr)
-{
-	check_expected_ptr(flash);
-	assert_int_equal(writecnt,    mock_type(int));
-	assert_int_equal(writearr[0], mock_type(int));
-
-	int rcnt = mock_type(int);
-	assert_int_equal(readcnt, rcnt);
-	for (int i = 0; i < rcnt; i++)
-		readarr[i] = i;
-
-	return 0;
-}
 
 struct flashchip mock_chip = {
 	.vendor		= "Generic",
@@ -48,6 +34,97 @@ struct flashchip mock_chip = {
 	.probe		= probe_spi_rdid,
 	.write		= NULL,
 };
+
+/*
+ * This declaration is needed for visibility, so that wrap below could
+ * redirect to real function.
+ */
+int __real_spi_send_command(const struct flashctx *flash,
+		unsigned int writecnt, unsigned int readcnt,
+		const unsigned char *writearr, unsigned char *readarr);
+
+int __wrap_spi_send_command(const struct flashctx *flash,
+		unsigned int writecnt, unsigned int readcnt,
+		const unsigned char *writearr, unsigned char *readarr)
+{
+	if (flash->chip != &mock_chip)
+		/*
+		 * Caller is some other test, redirecting to real function.
+		 * This test is the only one which uses wrap of spi_send_command,
+		 * all other tests use real function.
+		*/
+		return __real_spi_send_command(flash, writecnt, readcnt, writearr, readarr);
+
+	check_expected_ptr(flash);
+	assert_int_equal(writecnt,    mock_type(int));
+	assert_int_equal(writearr[0], mock_type(int));
+
+	int rcnt = mock_type(int);
+	assert_int_equal(readcnt, rcnt);
+	for (int i = 0; i < rcnt; i++)
+		readarr[i] = i;
+
+	return 0;
+}
+
+static void spi_read_progress_cb(struct flashrom_flashctx *flashctx)
+{
+	struct flashrom_progress *progress_state = flashctx->progress_state;
+	uint32_t *cnt = (uint32_t *) progress_state->user_data;
+	assert_int_equal(0x300, progress_state->total);
+	switch (*cnt) {
+		case 0:
+			assert_int_equal(0x100, progress_state->current);
+			break;
+		case 1:
+			assert_int_equal(0x200, progress_state->current);
+			break;
+		case 2:
+			assert_int_equal(0x300, progress_state->current);
+			break;
+		case 3:
+			assert_int_equal(0x300, progress_state->current);
+			break;
+		case 4:
+			assert_int_equal(0x300, progress_state->current);
+			break;
+		default:
+			fail();
+	}
+	(*cnt)++;
+}
+
+void spi_read_chunked_test_success(void **state)
+{
+	(void) state; /* unused */
+	uint8_t buf[0x400] = { 0x0 };
+	uint32_t cnt = 0;
+	const unsigned int max_data_read = 0x100;
+	const unsigned int offset = 0x100;
+	struct registered_master mst = {
+		.spi.read = default_spi_read,
+		.spi.max_data_read = max_data_read
+	};
+
+	/* setup initial test state */
+	struct flashctx flashctx = {
+		.chip = &mock_chip,
+		.mst = &mst
+	};
+	struct flashrom_progress progress_state = {
+		.user_data = (void *) &cnt,
+	};
+	flashrom_set_progress_callback(&flashctx, spi_read_progress_cb, &progress_state);
+	for (int i = 0; i < 4; i++) {
+		expect_memory(__wrap_spi_send_command, flash,
+				&flashctx, sizeof(flashctx));
+		will_return(__wrap_spi_send_command, JEDEC_WRDI);
+		will_return(__wrap_spi_send_command, JEDEC_READ);
+		will_return(__wrap_spi_send_command, max_data_read);
+	}
+	assert_int_equal(0, spi_chip_read(&flashctx, buf, offset, sizeof(buf)));
+	assert_int_equal(5, cnt);
+}
 
 void spi_write_enable_test_success(void **state)
 {

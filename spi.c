@@ -101,6 +101,8 @@ int spi_chip_read(struct flashctx *flash, uint8_t *buf, unsigned int start,
 {
 	int ret;
 	size_t to_read;
+	size_t start_address = start;
+	size_t end_address = len - start;
 	for (; len; len -= to_read, buf += to_read, start += to_read) {
 		/* Do not cross 16MiB boundaries in a single transfer.
 		   This helps with
@@ -110,6 +112,7 @@ int spi_chip_read(struct flashctx *flash, uint8_t *buf, unsigned int start,
 		ret = flash->mst->spi.read(flash, buf, start, to_read);
 		if (ret)
 			return ret;
+		update_progress(flash, FLASHROM_PROGRESS_READ, start - start_address + to_read, end_address);
 	}
 	return 0;
 }
@@ -131,12 +134,24 @@ int spi_aai_write(struct flashctx *flash, const uint8_t *buf, unsigned int start
 	return flash->mst->spi.write_aai(flash, buf, start, len);
 }
 
-int register_spi_master(const struct spi_master *mst)
+bool default_spi_probe_opcode(struct flashctx *flash, uint8_t opcode)
 {
-	struct registered_master rmst;
+	return true;
+}
+
+int register_spi_master(const struct spi_master *mst, void *data)
+{
+	struct registered_master rmst = {0};
+
+	if (mst->shutdown) {
+		if (register_shutdown(mst->shutdown, data)) {
+			mst->shutdown(data); /* cleanup */
+			return 1;
+		}
+	}
 
 	if (!mst->write_aai || !mst->write_256 || !mst->read || !mst->command ||
-	    !mst->multicommand ||
+	    !mst->multicommand || !mst->probe_opcode ||
 	    ((mst->command == default_spi_send_command) &&
 	     (mst->multicommand == default_spi_send_multicommand))) {
 		msg_perr("%s called with incomplete master definition. "
@@ -148,5 +163,7 @@ int register_spi_master(const struct spi_master *mst)
 
 	rmst.buses_supported = BUS_SPI;
 	rmst.spi = *mst;
+	if (data)
+		rmst.spi.data = data;
 	return register_master(&rmst);
 }

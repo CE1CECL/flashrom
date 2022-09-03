@@ -1,8 +1,14 @@
 project('flashromutils', 'c',
-  version : run_command('util/getversion.sh', '-v').stdout().strip(),
+  version : run_command('util/getversion.sh', '--version', check : true).stdout().strip(),
   license : 'GPL-2.0',
-  meson_version : '>=0.47.0',
-  default_options : ['warning_level=2', 'c_std=c99'],
+  meson_version : '>=0.50.0',
+  default_options : [
+    'warning_level=2',
+    'c_std=c99',
+    'werror=true',
+    'optimization=s',
+    'debug=false',
+  ],
 )
 
 # libtool versioning
@@ -13,6 +19,8 @@ lt_version = '@0@.@1@.@2@'.format(lt_current, lt_age, lt_revision)
 
 # hide/enable some warnings
 warning_flags = [
+  '-Wshadow',
+  '-Wmissing-prototypes',
   '-Wwrite-strings',
   '-Wno-unused-parameter',
   '-Wno-address-of-packed-member',
@@ -38,17 +46,16 @@ config_ch341a_spi = get_option('config_ch341a_spi')
 config_dediprog = get_option('config_dediprog')
 config_developerbox_spi = get_option('config_developerbox_spi')
 config_digilent_spi = get_option('config_digilent_spi')
+config_jlink_spi = get_option('config_jlink_spi')
 config_drkaiser = get_option('config_drkaiser')
 config_dummy = get_option('config_dummy')
-config_ene_lpc = get_option('config_ene_lpc')
 config_ft2232_spi = get_option('config_ft2232_spi')
 config_gfxnvidia = get_option('config_gfxnvidia')
-config_raiden = get_option('config_raiden')
+config_raiden_debug_spi = get_option('config_raiden_debug_spi')
 config_internal = get_option('config_internal')
 config_it8212 = get_option('config_it8212')
 config_linux_mtd = get_option('config_linux_mtd')
 config_linux_spi = get_option('config_linux_spi')
-config_mec1308 = get_option('config_mec1308')
 config_mstarddc_spi = get_option('config_mstarddc_spi')
 config_nic3com = get_option('config_nic3com')
 config_nicintel_eeprom = get_option('config_nicintel_eeprom')
@@ -65,15 +72,96 @@ config_satasii = get_option('config_satasii')
 config_serprog = get_option('config_serprog')
 config_usbblaster_spi = get_option('config_usbblaster_spi')
 config_stlinkv3_spi = get_option('config_stlinkv3_spi')
-config_lspcon_i2c_spi = get_option('config_lspcon_i2c_spi')
+config_parade_lspcon = get_option('config_parade_lspcon')
+config_mediatek_i2c_spi = get_option('config_mediatek_i2c_spi')
 config_realtek_mst_i2c_spi = get_option('config_realtek_mst_i2c_spi')
+config_print_wiki= get_option('print_wiki')
+config_default_programmer_name = get_option('default_programmer_name')
+config_default_programmer_args = get_option('default_programmer_args')
 
 cargs = []
 deps = []
-srcs = []
+srcs = files(
+  '82802ab.c',
+  'at45db.c',
+  'bitbang_spi.c',
+  'edi.c',
+  'en29lv640b.c',
+  'flashchips.c',
+  'flashrom.c',
+  'fmap.c',
+  'helpers.c',
+  'helpers_fileio.c',
+  'ich_descriptors.c',
+  'jedec.c',
+  'layout.c',
+  'libflashrom.c',
+  'opaque.c',
+  'parallel.c',
+  'print.c',
+  'programmer.c',
+  'programmer_table.c',
+  's25f.c',
+  'sfdp.c',
+  'spi25.c',
+  'spi25_statusreg.c',
+  'spi95.c',
+  'spi.c',
+  'sst28sf040.c',
+  'sst49lfxxxc.c',
+  'sst_fwhub.c',
+  'stm50.c',
+  'udelay.c',
+  'w29ee011.c',
+  'w39.c',
+  'writeprotect.c',
+  'writeprotect_ranges.c',
+)
 
-need_raw_access = false
-need_serial = false
+subdir('platform')
+
+host_is_x86 = ['x86', 'x86_64'].contains(host_machine.cpu_family())
+
+need_serial = [
+  config_buspirate_spi, config_pony_spi, config_serprog,
+].contains(true)
+need_bitbang_spi = [
+  config_internal, config_nicintel_spi, config_ogp_spi,
+  config_pony_spi, config_rayer_spi,
+].contains(true)
+need_raw_mem_access = [
+  config_atapromise, config_drkaiser, config_gfxnvidia, config_internal,
+  config_it8212, config_nicintel, config_nicintel_eeprom, config_nicintel_spi,
+  config_ogp_spi, config_satamv, config_satasii,
+].contains(true)
+# Internal programmer uses x86 features if the system is x86
+need_x86_msr = config_internal and host_is_x86
+need_x86_port_io = [
+  config_atahpt, config_atapromise, config_internal and host_is_x86,
+  config_nic3com, config_nicnatsemi, config_nicrealtek, config_rayer_spi,
+  config_satamv,
+].contains(true)
+need_libpci = [
+  config_atahpt, config_atapromise, config_atavia,
+  config_drkaiser, config_gfxnvidia, config_internal, config_it8212,
+  config_nic3com, config_nicintel, config_nicintel_eeprom, config_nicintel_spi,
+  config_nicnatsemi, config_nicrealtek, config_ogp_spi, config_satamv,
+  config_satasii,
+].contains(true)
+need_libusb1 = [
+  config_ch341a_spi, config_dediprog, config_developerbox_spi,
+  config_digilent_spi, config_pickit2_spi, config_raiden_debug_spi,
+  config_stlinkv3_spi,
+].contains(true)
+need_libftdi1 = [
+  config_ft2232_spi, config_usbblaster_spi,
+].contains(true)
+need_libjaylink = config_jlink_spi
+
+if (need_x86_port_io or need_x86_msr) and not host_is_x86
+  error('one or more enabled programmer only supports x86 and target is not')
+endif
+
 
 # check for required symbols
 if cc.has_function('clock_gettime')
@@ -85,296 +173,270 @@ endif
 if cc.check_header('sys/utsname.h')
   add_project_arguments('-DHAVE_UTSNAME=1', language : 'c')
 endif
+if host_machine.system() in ['cygwin', 'windows']
+  add_project_arguments('-DIS_WINDOWS=1', language : 'c')
+else
+  add_project_arguments('-DIS_WINDOWS=0', language : 'c')
+endif
 
 # some programmers require libusb
 if get_option('usb')
-  srcs += 'usbdev.c'
-  srcs += 'usb_device.c'
+  srcs += files('usbdev.c', 'usb_device.c')
   deps += dependency('libusb-1.0')
-else
-  config_ch341a_spi = false
-  config_dediprog = false
-  config_digilent_spi = false
-  config_developerbox_spi = false
-  config_pickit2_spi = false
+elif need_libusb1
+  error('usb is disabled but one or more enabled programmer requires USB access')
 endif
 
 # some programmers require libpci
 if get_option('pciutils')
-  srcs += 'pcidev.c'
+  srcs += files('pcidev.c')
   deps += dependency('libpci')
-  cargs += '-DNEED_PCI=1'
-else
-  config_atahpt = false
-  config_atapromise = false
-  config_atavia = false
-  config_drkaiser = false
-  config_gfxnvidia = false
-  config_raiden = false
-  config_internal = false
-  config_it8212 = false
-  config_nic3com = false
-  config_nicintel_eeprom = false
-  config_nicintel = false
-  config_nicintel_spi = false
-  config_nicnatsemi = false
-  config_nicrealtek = false
-  config_ogp_spi = false
-  config_rayer_spi = false
-  config_satamv = false
-  config_satasii = false
+elif need_libpci
+  error('pciutils is disabled but one or more enabled programmer requires PCI access')
+endif
+
+if need_libftdi1
+  deps += dependency('libftdi1')
+endif
+
+if need_libjaylink
+  deps += dependency('libjaylink')
 endif
 
 # set defines for configured programmers
 if config_atahpt
-  srcs += 'atahpt.c'
+  srcs += files('atahpt.c')
   cargs += '-DCONFIG_ATAHPT=1'
 endif
 if config_atapromise
-  srcs += 'atapromise.c'
+  srcs += files('atapromise.c')
   cargs += '-DCONFIG_ATAPROMISE=1'
 endif
 if config_atavia
-  srcs += 'atavia.c'
+  srcs += files('atavia.c')
   cargs += '-DCONFIG_ATAVIA=1'
 endif
 if config_buspirate_spi
-  srcs += 'buspirate_spi.c'
+  srcs += files('buspirate_spi.c')
   cargs += '-DCONFIG_BUSPIRATE_SPI=1'
-  need_serial = true
 endif
 if config_ch341a_spi
-  srcs += 'ch341a_spi.c'
+  srcs += files('ch341a_spi.c')
   cargs += '-DCONFIG_CH341A_SPI=1'
 endif
 if config_dediprog
-  srcs += 'dediprog.c'
+  srcs += files('dediprog.c')
   cargs += '-DCONFIG_DEDIPROG=1'
 endif
 if config_developerbox_spi
-  srcs += 'developerbox_spi.c'
+  srcs += files('developerbox_spi.c')
   cargs += '-DCONFIG_DEVELOPERBOX_SPI=1'
 endif
 if config_digilent_spi
-  srcs += 'digilent_spi.c'
+  srcs += files('digilent_spi.c')
   cargs += '-DCONFIG_DIGILENT_SPI=1'
 endif
+if config_jlink_spi
+  srcs += files('jlink_spi.c')
+  cargs += '-DCONFIG_JLINK_SPI=1'
+endif
 if config_drkaiser
-  srcs += 'drkaiser.c'
+  srcs += files('drkaiser.c')
   cargs += '-DCONFIG_DRKAISER=1'
 endif
 if config_dummy
-  srcs += 'dummyflasher.c'
+  srcs += files('dummyflasher.c')
   cargs += '-DCONFIG_DUMMY=1'
 endif
 if config_ft2232_spi
-  srcs += 'ft2232_spi.c'
+  srcs += files('ft2232_spi.c')
   cargs += '-DCONFIG_FT2232_SPI=1'
-  deps += dependency('libftdi1')
   cargs += '-DHAVE_FT232H=1'
 endif
 if config_gfxnvidia
-  srcs += 'gfxnvidia.c'
+  srcs += files('gfxnvidia.c')
   cargs += '-DCONFIG_GFXNVIDIA=1'
 endif
-if config_raiden
-  srcs += 'raiden_debug_spi.c'
-  cargs += '-DCONFIG_RAIDEN=1'
+if config_raiden_debug_spi
+  srcs += files('raiden_debug_spi.c')
+  cargs += '-DCONFIG_RAIDEN_DEBUG_SPI=1'
 endif
 if config_internal
-  srcs += 'board_enable.c'
-  srcs += 'cbtable.c'
-  srcs += 'chipset_enable.c'
-  srcs += 'internal.c'
-  srcs += 'processor_enable.c'
-  if target_machine.cpu_family() == 'x86' or target_machine.cpu_family() == 'x86_64'
-    srcs += 'amd_imc.c'
-    srcs += 'dmi.c'
-    srcs += 'ichspi.c'
-    srcs += 'it85spi.c'
-    srcs += 'it87spi.c'
-    srcs += 'mcp6x_spi.c'
-    srcs += 'sb600spi.c'
-    srcs += 'wbsio_spi.c'
+  srcs += files(
+    'board_enable.c',
+    'cbtable.c',
+    'chipset_enable.c',
+    'internal.c',
+    'processor_enable.c',
+    'known_boards.c',
+  )
+  if host_is_x86
+    srcs += files(
+      'amd_imc.c',
+      'dmi.c',
+      'ichspi.c',
+      'it87spi.c',
+      'mcp6x_spi.c',
+      'sb600spi.c',
+      'wbsio_spi.c',
+    )
   endif
-  config_bitbang_spi = true
   cargs += '-DCONFIG_INTERNAL=1'
   if get_option('config_internal_dmi')
     # Use internal DMI/SMBIOS decoder by default instead of relying on dmidecode.
     cargs += '-DCONFIG_INTERNAL_DMI=1'
   endif
 endif
-if config_ene_lpc
-  srcs += 'ene_lpc.c'
-  cargs += '-DCONFIG_ENE_LPC=1'
-endif
 if config_it8212
-  srcs += 'it8212.c'
+  srcs += files('it8212.c')
   cargs += '-DCONFIG_IT8212=1'
 endif
 if config_linux_mtd
-  srcs += 'linux_mtd.c'
+  srcs += files('linux_mtd.c')
   cargs += '-DCONFIG_LINUX_MTD=1'
 endif
 if config_linux_spi
-  srcs += 'linux_spi.c'
+  srcs += files('linux_spi.c')
   cargs += '-DCONFIG_LINUX_SPI=1'
 endif
-if config_mec1308
-  srcs += 'mec1308.c'
-  cargs += '-DCONFIG_MEC1308=1'
-endif
 if config_mstarddc_spi
-  srcs += 'mstarddc_spi.c'
+  srcs += files('mstarddc_spi.c')
   cargs += '-DCONFIG_MSTARDDC_SPI=1'
 endif
 if config_nic3com
-  srcs += 'nic3com.c'
+  srcs += files('nic3com.c')
   cargs += '-DCONFIG_NIC3COM=1'
 endif
 if config_nicintel
-  srcs += 'nicintel.c'
+  srcs += files('nicintel.c')
   cargs += '-DCONFIG_NICINTEL=1'
 endif
 if config_nicintel_eeprom
-  srcs += 'nicintel_eeprom.c'
+  srcs += files('nicintel_eeprom.c')
   cargs += '-DCONFIG_NICINTEL_EEPROM=1'
 endif
 if config_nicintel_spi
-  srcs += 'nicintel_spi.c'
-  config_bitbang_spi = true
+  srcs += files('nicintel_spi.c')
   cargs += '-DCONFIG_NICINTEL_SPI=1'
 endif
 if config_nicnatsemi
-  srcs += 'nicnatsemi.c'
+  srcs += files('nicnatsemi.c')
   cargs += '-DCONFIG_NICNATSEMI=1'
 endif
 if config_nicrealtek
-  srcs += 'nicrealtek.c'
+  srcs += files('nicrealtek.c')
   cargs += '-DCONFIG_NICREALTEK=1'
 endif
 if config_ogp_spi
-  config_bitbang_spi = true
-  srcs += 'ogp_spi.c'
+  srcs += files('ogp_spi.c')
   cargs += '-DCONFIG_OGP_SPI=1'
 endif
 if config_pickit2_spi
-  srcs += 'pickit2_spi.c'
+  srcs += files('pickit2_spi.c')
   cargs += '-DCONFIG_PICKIT2_SPI=1'
 endif
 if config_pony_spi
-  srcs += 'pony_spi.c'
-  need_serial = true
-  config_bitbang_spi = true
+  srcs += files('pony_spi.c')
   cargs += '-DCONFIG_PONY_SPI=1'
 endif
 if config_rayer_spi
-  srcs += 'rayer_spi.c'
-  config_bitbang_spi = true
-  need_raw_access = true
+  srcs += files('rayer_spi.c')
   cargs += '-DCONFIG_RAYER_SPI=1'
 endif
 if config_satamv
-  srcs += 'satamv.c'
+  srcs += files('satamv.c')
   cargs += '-DCONFIG_SATAMV=1'
 endif
 if config_satasii
-  srcs += 'satasii.c'
+  srcs += files('satasii.c')
   cargs += '-DCONFIG_SATASII=1'
 endif
 if config_serprog
-  srcs += 'serprog.c'
+  srcs += files('serprog.c')
   cargs += '-DCONFIG_SERPROG=1'
-  need_serial = true
 endif
 if config_usbblaster_spi
-  srcs += 'usbblaster_spi.c'
+  srcs += files('usbblaster_spi.c')
   cargs += '-DCONFIG_USBBLASTER_SPI=1'
 endif
 if config_stlinkv3_spi
-  srcs += 'stlinkv3_spi.c'
+  srcs += files('stlinkv3_spi.c')
   cargs += '-DCONFIG_STLINKV3_SPI=1'
 endif
-if config_lspcon_i2c_spi
-  srcs += 'lspcon_i2c_spi.c'
-  cargs += '-DCONFIG_LSPCON_I2C_SPI=1'
+if config_parade_lspcon
+  srcs += files('parade_lspcon.c')
+  cargs += '-DCONFIG_PARADE_LSPCON=1'
+endif
+if config_mediatek_i2c_spi
+  srcs += files('mediatek_i2c_spi.c')
+  cargs += '-DCONFIG_MEDIATEK_I2C_SPI=1'
 endif
 if config_realtek_mst_i2c_spi
-  srcs += 'realtek_mst_i2c_spi.c'
+  srcs += files('realtek_mst_i2c_spi.c')
   cargs += '-DCONFIG_REALTEK_MST_I2C_SPI=1'
 endif
 
 # bitbanging SPI infrastructure
-if config_bitbang_spi
-  srcs += 'bitbang_spi.c'
+if need_bitbang_spi
+  srcs += files('bitbang_spi.c')
   cargs += '-DCONFIG_BITBANG_SPI=1'
 endif
 
 if host_machine.system() == 'linux'
-  srcs += 'i2c_helper_linux.c'
-  cargs += '-DCONFIG_I2C_SUPPORT=1'
+  srcs += files('i2c_helper_linux.c')
 endif
 
-# raw memory, MSR or PCI port I/O access
-if need_raw_access
-  srcs += 'hwaccess.c'
-  srcs += 'physmap.c'
-  cargs += '-DNEED_RAW_ACCESS=1'
+if need_raw_mem_access
+  srcs += files('hwaccess_physmap.c')
+endif
+
+if need_x86_port_io
+  srcs += files('hwaccess_x86_io.c')
+  cargs += '-D__FLASHROM_HAVE_OUTB__=1'
+endif
+
+if need_x86_msr
+  srcs += files('hwaccess_x86_msr.c')
 endif
 
 # raw serial IO
 if need_serial
-  srcs += 'custom_baud.c'
-  srcs += 'serial.c'
+  srcs += files('serial.c')
+  if host_machine.system() == 'linux'
+    srcs += files('custom_baud_linux.c')
+  else
+    srcs += files('custom_baud.c')
+  endif
 endif
 
-prefix = get_option('prefix')
-sbindir = join_paths(prefix, get_option('sbindir'))
-libdir = join_paths(prefix, get_option('libdir'))
-mandir = join_paths(prefix, get_option('mandir'))
+if config_print_wiki
+  srcs += files('print_wiki.c')
+  cargs += '-DCONFIG_PRINT_WIKI=1'
+endif
+
+if config_default_programmer_name != ''
+  cargs += '-DCONFIG_DEFAULT_PROGRAMMER_NAME=&programmer_' + config_default_programmer_name
+else
+  cargs += '-DCONFIG_DEFAULT_PROGRAMMER_NAME=NULL'
+endif
+
+cargs += '-DCONFIG_DEFAULT_PROGRAMMER_ARGS="' + config_default_programmer_args + '"'
 
 install_headers([
-    'libflashrom.h',
+    'include/libflashrom.h',
   ],
 )
 
-# core modules needed by both the library and the CLI
-srcs += '82802ab.c'
-srcs += 'at45db.c'
-srcs += 'edi.c'
-srcs += 'en29lv640b.c'
-srcs += 'flashchips.c'
-srcs += 'flashrom.c'
-srcs += 'fmap.c'
-srcs += 'helpers.c'
-srcs += 'ich_descriptors.c'
-srcs += 'jedec.c'
-srcs += 'layout.c'
-srcs += 'libflashrom.c'
-srcs += 'opaque.c'
-srcs += 'print.c'
-srcs += 'programmer.c'
-srcs += 'sfdp.c'
-srcs += 'spi25.c'
-srcs += 'spi25_statusreg.c'
-srcs += 'spi95.c'
-srcs += 'spi.c'
-srcs += 'sst28sf040.c'
-srcs += 'sst49lfxxxc.c'
-srcs += 'sst_fwhub.c'
-srcs += 'stm50.c'
-srcs += 'udelay.c'
-srcs += 'w29ee011.c'
-srcs += 'w39.c'
-srcs += 'writeprotect.c'
+include_dir = include_directories('include')
 
 mapfile = 'libflashrom.map'
 vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile)
-flashrom = shared_library(
+libflashrom = both_libraries(
   'flashrom',
   sources : [
     srcs,
   ],
+  include_directories : include_dir,
   soversion : lt_current,
   version : lt_version,
   dependencies : [
@@ -399,7 +461,7 @@ endif
 
 pkgg = import('pkgconfig')
 pkgg.generate(
-  libraries : flashrom,
+  libraries : libflashrom,
   version : version,
   name : 'flashrom',
   filebase : 'flashrom',
@@ -407,61 +469,57 @@ pkgg.generate(
 )
 
 conf.set('VERSION', version)
-conf.set('MAN_DATE', run_command('util/getrevision.sh', '--date', 'flashrom.8.tmpl').stdout().strip())
+conf.set('MAN_DATE', run_command('util/getversion.sh', '--man-date', check : true).stdout().strip())
 configure_file(
   input : 'flashrom.8.tmpl',
   output : 'flashrom.8',
   configuration : conf,
   install: true,
-  install_dir: join_paths(mandir, 'man8'),
+  install_dir: join_paths(get_option('mandir'), 'man8'),
 )
 
-flashrom_dep = declare_dependency(
-  link_with : flashrom,
-  include_directories : include_directories('.'),
-  dependencies : deps
-)
-
-# we can't just link_with libflashrom as we require all the internal symbols...
 executable(
   'flashrom',
-  sources : [
-    srcs,
+  files(
     'cli_classic.c',
     'cli_common.c',
     'cli_output.c',
-    'flashrom.c',
-  ],
-  dependencies : [
-    deps,
-  ],
-  c_args : [
-    cargs,
-    '-DCONFIG_DEFAULT_PROGRAMMER=PROGRAMMER_INVALID',
-    '-DCONFIG_DEFAULT_PROGRAMMER_ARGS=""',
-  ],
+  ),
+  c_args : cargs,
+  include_directories : include_dir,
   install : true,
-  install_dir : sbindir,
+  install_dir : get_option('sbindir'),
+  link_with : libflashrom.get_static_lib(), # flashrom needs internal symbols of libflashrom
 )
 
-subdir('util')
+if get_option('ich_descriptors_tool').auto() or get_option('ich_descriptors_tool').enabled()
+  subdir('util/ich_descriptors_tool')
+endif
 
-# unit-test framework
-cmocka_dep = dependency(
-  'cmocka',
-  fallback: ['cmocka', 'cmocka_dep']
-)
-flashrom_test_dep = declare_dependency(
-  include_directories : include_directories('.'),
-  sources : [
-    srcs,
-    'cli_common.c',
-    'cli_output.c',
-    'flashrom.c',
-  ],
-  dependencies : [
-    deps,
-  ],
-)
+# Use `.auto() or .enabled()` instead of `.allowed()` to keep the minimum meson version as low as possible.
+# `.allowed()` gets introduced in 0.59.0
+if get_option('tests').auto() or get_option('tests').enabled()
+  # unit-test framework
+  cmocka = dependency('cmocka', required : get_option('tests'))
 
-subdir('tests')
+  flashrom_test_dep = declare_dependency(
+    include_directories : include_dir,
+    sources : [
+      srcs,
+      'cli_common.c',
+      'cli_output.c',
+      'flashrom.c',
+    ],
+    compile_args : [
+      '-includestdlib.h',
+      '-includeunittest_env.h',
+    ],
+    dependencies : [
+      deps,
+    ],
+  )
+
+  if cmocka.found()
+    subdir('tests')
+  endif
+endif

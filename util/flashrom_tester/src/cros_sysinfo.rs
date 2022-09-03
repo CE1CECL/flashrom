@@ -59,22 +59,3 @@ pub fn system_info() -> IoResult<String> {
 pub fn bios_info() -> IoResult<String> {
     dmidecode_dispatch(&["-q", "-t0"])
 }
-
-pub fn eventlog_list() -> Result<String, std::io::Error> {
-    mosys_dispatch(&["eventlog", "list"])
-}
-
-fn mosys_dispatch<S: AsRef<OsStr> + Debug>(args: &[S]) -> IoResult<String> {
-    info!("mosys_dispatch() running: /usr/sbin/mosys {:?}", args);
-
-    let output = Command::new("/usr/sbin/mosys")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        return Err(utils::translate_command_error(&output));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(stdout)
-}
