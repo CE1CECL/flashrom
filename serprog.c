@@ -26,11 +26,7 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #endif
-#if IS_WINDOWS
-#include <conio.h>
-#else
 #include <termios.h>
-#endif
 #include <string.h>
 #include <errno.h>
 #include "flash.h"
