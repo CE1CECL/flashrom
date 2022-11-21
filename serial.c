@@ -24,14 +24,10 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <inttypes.h>
-#if IS_WINDOWS
-#include <conio.h>
-#else
 #include <termios.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
-#endif
 #include "flash.h"
 #include "programmer.h"
 #include "custom_baud.h"
@@ -177,7 +173,7 @@ int serialport_config(fdtype fd, int baud)
 		msg_perr_strerror("Could not fetch new serial port configuration: ");
 		return 1;
 	}
-	msg_pdbg("Baud rate is %ld.\n", dcb.BaudRate);
+	msg_pdbg("Baud rate is %d.\n", dcb.BaudRate);
 #else
 	struct termios wanted, observed;
 	if (tcgetattr(fd, &observed) != 0) {
@@ -494,7 +490,7 @@ int serialport_read_nonblock(unsigned char *c, unsigned int readcnt, unsigned in
 			ret = -1;
 			break;
 		}
-		msg_pspew("read %lu bytes\n", rv);
+		msg_pspew("read %d bytes\n", rv);
 #else
 		rv = read(sp_fd, c + rd_bytes, readcnt - rd_bytes);
 		msg_pspew("read %zd bytes\n", rv);
@@ -578,7 +574,7 @@ int serialport_write_nonblock(const unsigned char *buf, unsigned int writecnt, u
 			ret = -1;
 			break;
 		}
-		msg_pspew("wrote %lu bytes\n", rv);
+		msg_pspew("wrote %d bytes\n", rv);
 #else
 		rv = write(sp_fd, buf + wr_bytes, writecnt - wr_bytes);
 		msg_pspew("wrote %zd bytes\n", rv);
