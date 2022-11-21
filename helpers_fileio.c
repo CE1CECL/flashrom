@@ -116,10 +116,7 @@ int write_buf_to_file(const unsigned char *buf, unsigned long size, const char *
 		goto out;
 	}
 	if (S_ISREG(image_stat.st_mode)) {
-		if (fsync(fileno(image))) {
-			msg_gerr("Error: fsyncing file \"%s\" failed: %s\n", filename, strerror(errno));
-			ret = 1;
-		}
+
 	}
 #endif
 out:
