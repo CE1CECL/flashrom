@@ -442,13 +442,13 @@ CONFIG_SATASII ?= yes
 
 # Highpoint (HPT) ATA/RAID controller support.
 # IMPORTANT: This code is not yet working!
-CONFIG_ATAHPT ?= no
+CONFIG_ATAHPT ?= yes
 
 # VIA VT6421A LPC memory support
 CONFIG_ATAVIA ?= yes
 
 # Promise ATA controller support.
-CONFIG_ATAPROMISE ?= no
+CONFIG_ATAPROMISE ?= yes
 
 # Always enable FT2232 SPI dongles for now.
 CONFIG_FT2232_SPI ?= yes
@@ -457,7 +457,7 @@ CONFIG_FT2232_SPI ?= yes
 CONFIG_USBBLASTER_SPI ?= yes
 
 # MSTAR DDC support needs more tests/reviews/cleanups.
-CONFIG_MSTARDDC_SPI ?= no
+CONFIG_MSTARDDC_SPI ?= yes
 
 # Always enable PICkit2 SPI dongles for now.
 CONFIG_PICKIT2_SPI ?= yes
@@ -466,13 +466,13 @@ CONFIG_PICKIT2_SPI ?= yes
 CONFIG_STLINKV3_SPI ?= yes
 
 # Disables Parade LSPCON support until the i2c helper supports multiple systems.
-CONFIG_PARADE_LSPCON ?= no
+CONFIG_PARADE_LSPCON ?= yes
 
 # Disables MediaTek support until the i2c helper supports multiple systems.
-CONFIG_MEDIATEK_I2C_SPI ?= no
+CONFIG_MEDIATEK_I2C_SPI ?= yes
 
 # Disables REALTEK_MST support until the i2c helper supports multiple systems.
-CONFIG_REALTEK_MST_I2C_SPI ?= no
+CONFIG_REALTEK_MST_I2C_SPI ?= yes
 
 # Always enable dummy tracing for now.
 CONFIG_DUMMY ?= yes
@@ -484,7 +484,7 @@ CONFIG_DRKAISER ?= yes
 CONFIG_NICREALTEK ?= yes
 
 # Disable National Semiconductor NICs until support is complete and tested.
-CONFIG_NICNATSEMI ?= no
+CONFIG_NICNATSEMI ?= yes
 
 # Always enable Intel NICs for now.
 CONFIG_NICINTEL ?= yes
@@ -527,13 +527,13 @@ CONFIG_VL805 ?= yes
 CONFIG_DIGILENT_SPI ?= yes
 
 # Disable J-Link for now.
-CONFIG_JLINK_SPI ?= no
+CONFIG_JLINK_SPI ?= yes
 
 # National Instruments USB-845x is Windows only and needs a proprietary library.
-CONFIG_NI845X_SPI ?= no
+CONFIG_NI845X_SPI ?= yes
 
 # Disable wiki printing by default. It is only useful if you have wiki access.
-CONFIG_PRINT_WIKI ?= no
+CONFIG_PRINT_WIKI ?= yes
 
 # Disable all features if CONFIG_NOTHING=yes is given unless CONFIG_EVERYTHING was also set
 ifeq ($(CONFIG_NOTHING), yes)
