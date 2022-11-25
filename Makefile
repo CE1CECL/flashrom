@@ -268,9 +268,9 @@ override LDFLAGS += -lgetopt
 endif
 
 ifeq ($(TARGET_OS), $(filter $(TARGET_OS), MinGW Cygwin))
-#$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
-#$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
-#$(call mark_unsupported,$(DEPENDS_ON_X86_MSR))
+$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
+$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
+$(call mark_unsupported,$(DEPENDS_ON_X86_MSR))
 FEATURE_FLAGS += -D'IS_WINDOWS=1'
 else
 FEATURE_FLAGS += -D'IS_WINDOWS=0'
@@ -286,14 +286,14 @@ FLASHROM_CFLAGS += -Dffs=__builtin_ffs
 FLASHROM_CFLAGS += -D__USE_MINGW_ANSI_STDIO=1
 
 # For now we disable all PCI-based programmers on Windows/MinGW (no libpci).
-#$(call mark_unsupported,$(DEPENDS_ON_LIBPCI))
+$(call mark_unsupported,$(DEPENDS_ON_LIBPCI))
 # And programmers that need raw access.
-#$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
+$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
 
 else # No MinGW
 
 # NI USB-845x only supported on Windows at the moment
-#$(call mark_unsupported,CONFIG_NI845X_SPI)
+$(call mark_unsupported,CONFIG_NI845X_SPI)
 
 endif
 
@@ -302,57 +302,57 @@ ifeq ($(MAKECMDGOALS),)
 .DEFAULT_GOAL := libflashrom.a
 $(info Setting default goal to libflashrom.a)
 endif
-#$(call mark_unsupported,CONFIG_DUMMY)
+$(call mark_unsupported,CONFIG_DUMMY)
 # libpayload does not provide the romsize field in struct pci_dev that the atapromise code requires.
-#$(call mark_unsupported,CONFIG_ATAPROMISE)
+$(call mark_unsupported,CONFIG_ATAPROMISE)
 # Dediprog, Developerbox, USB-Blaster, PICkit2, CH341A and FT2232 are not supported with libpayload (missing libusb support).
-#$(call mark_unsupported,$(DEPENDS_ON_LIBUSB1) $(DEPENDS_ON_LIBFTDI) $(DEPENDS_ON_LIBJAYLINK))
+$(call mark_unsupported,$(DEPENDS_ON_LIBUSB1) $(DEPENDS_ON_LIBFTDI) $(DEPENDS_ON_LIBJAYLINK))
 endif
 
 ifeq ($(HAS_LINUX_MTD), no)
-#$(call mark_unsupported,CONFIG_LINUX_MTD)
+$(call mark_unsupported,CONFIG_LINUX_MTD)
 endif
 
 ifeq ($(HAS_LINUX_SPI), no)
-#$(call mark_unsupported,CONFIG_LINUX_SPI)
+$(call mark_unsupported,CONFIG_LINUX_SPI)
 endif
 
 ifeq ($(HAS_LINUX_I2C), no)
-#$(call mark_unsupported,DEPENDS_ON_LINUX_I2C)
+$(call mark_unsupported,DEPENDS_ON_LINUX_I2C)
 endif
 
 ifeq ($(TARGET_OS), Android)
 # Android on x86 (currently) does not provide raw PCI port I/O operations.
-#$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
+$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
 endif
 
 # Disable the internal programmer on unsupported architectures or systems
 ifeq ($(or $(filter $(ARCH), x86), $(filter $(TARGET_OS), Linux)), )
-#$(call mark_unsupported,CONFIG_INTERNAL)
+$(call mark_unsupported,CONFIG_INTERNAL)
 endif
 
 ifeq ($(HAS_LIBPCI), no)
-#$(call mark_unsupported,$(DEPENDS_ON_LIBPCI))
+$(call mark_unsupported,$(DEPENDS_ON_LIBPCI))
 endif
 
 ifeq ($(HAS_LIBFTDI1), no)
-#$(call mark_unsupported,$(DEPENDS_ON_LIBFTDI1))
+$(call mark_unsupported,$(DEPENDS_ON_LIBFTDI1))
 endif
 
 ifeq ($(HAS_LIB_NI845X), no)
-#$(call mark_unsupported,$(DEPENDS_ON_LIB_NI845X))
+$(call mark_unsupported,$(DEPENDS_ON_LIB_NI845X))
 endif
 
 ifeq ($(HAS_LIBJAYLINK), no)
-#$(call mark_unsupported,$(DEPENDS_ON_LIBJAYLINK))
+$(call mark_unsupported,$(DEPENDS_ON_LIBJAYLINK))
 endif
 
 ifeq ($(HAS_LIBUSB1), no)
-#$(call mark_unsupported,$(DEPENDS_ON_LIBUSB1))
+$(call mark_unsupported,$(DEPENDS_ON_LIBUSB1))
 endif
 
 ifeq ($(HAS_SERIAL), no)
-#$(call mark_unsupported, $(DEPENDS_ON_SERIAL))
+$(call mark_unsupported, $(DEPENDS_ON_SERIAL))
 endif
 
 ifeq ($(ENDIAN), little)
@@ -365,15 +365,15 @@ endif
 # PCI port I/O support is unimplemented on PPC/MIPS/SPARC and unavailable on ARM.
 # Right now this means the drivers below only work on x86.
 ifneq ($(ARCH), x86)
-#$(call mark_unsupported,$(DEPENDS_ON_X86_MSR))
-#$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
+$(call mark_unsupported,$(DEPENDS_ON_X86_MSR))
+$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
 endif
 
 # Additionally disable all drivers needing raw access (memory, PCI, port I/O)
 # on architectures with unknown raw access properties.
 # Right now those architectures are alpha hppa m68k sh s390
 ifneq ($(ARCH), $(filter $(ARCH), x86 mips ppc arm sparc arc e2k))
-#$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
+$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
 endif
 
 ###############################################################################
@@ -442,13 +442,13 @@ CONFIG_SATASII ?= yes
 
 # Highpoint (HPT) ATA/RAID controller support.
 # IMPORTANT: This code is not yet working!
-CONFIG_ATAHPT ?= yes
+CONFIG_ATAHPT ?= no
 
 # VIA VT6421A LPC memory support
 CONFIG_ATAVIA ?= yes
 
 # Promise ATA controller support.
-CONFIG_ATAPROMISE ?= yes
+CONFIG_ATAPROMISE ?= no
 
 # Always enable FT2232 SPI dongles for now.
 CONFIG_FT2232_SPI ?= yes
@@ -457,7 +457,7 @@ CONFIG_FT2232_SPI ?= yes
 CONFIG_USBBLASTER_SPI ?= yes
 
 # MSTAR DDC support needs more tests/reviews/cleanups.
-CONFIG_MSTARDDC_SPI ?= yes
+CONFIG_MSTARDDC_SPI ?= no
 
 # Always enable PICkit2 SPI dongles for now.
 CONFIG_PICKIT2_SPI ?= yes
@@ -466,13 +466,13 @@ CONFIG_PICKIT2_SPI ?= yes
 CONFIG_STLINKV3_SPI ?= yes
 
 # Disables Parade LSPCON support until the i2c helper supports multiple systems.
-CONFIG_PARADE_LSPCON ?= yes
+CONFIG_PARADE_LSPCON ?= no
 
 # Disables MediaTek support until the i2c helper supports multiple systems.
-CONFIG_MEDIATEK_I2C_SPI ?= yes
+CONFIG_MEDIATEK_I2C_SPI ?= no
 
 # Disables REALTEK_MST support until the i2c helper supports multiple systems.
-CONFIG_REALTEK_MST_I2C_SPI ?= yes
+CONFIG_REALTEK_MST_I2C_SPI ?= no
 
 # Always enable dummy tracing for now.
 CONFIG_DUMMY ?= yes
@@ -484,7 +484,7 @@ CONFIG_DRKAISER ?= yes
 CONFIG_NICREALTEK ?= yes
 
 # Disable National Semiconductor NICs until support is complete and tested.
-CONFIG_NICNATSEMI ?= yes
+CONFIG_NICNATSEMI ?= no
 
 # Always enable Intel NICs for now.
 CONFIG_NICINTEL ?= yes
@@ -527,13 +527,13 @@ CONFIG_VL805 ?= yes
 CONFIG_DIGILENT_SPI ?= yes
 
 # Disable J-Link for now.
-CONFIG_JLINK_SPI ?= yes
+CONFIG_JLINK_SPI ?= no
 
 # National Instruments USB-845x is Windows only and needs a proprietary library.
-CONFIG_NI845X_SPI ?= yes
+CONFIG_NI845X_SPI ?= no
 
 # Disable wiki printing by default. It is only useful if you have wiki access.
-CONFIG_PRINT_WIKI ?= yes
+CONFIG_PRINT_WIKI ?= no
 
 # Disable all features if CONFIG_NOTHING=yes is given unless CONFIG_EVERYTHING was also set
 ifeq ($(CONFIG_NOTHING), yes)
