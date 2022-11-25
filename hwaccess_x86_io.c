@@ -154,6 +154,18 @@
 #define IO_PORT_FUNCTION USE_LIBC_TARGET_LAST
 #endif
 
+#if IS_WINDOWS
+
+#include <io.h>
+#include <windows.h>
+#include <aclapi.h>
+
+#include <intrin.h>
+
+#define IO_PORT_PERMISSION USE_DUMMY
+#define IO_PORT_FUNCTION USE_ASM
+#endif
+
 /* Make sure IO_PORT_PERMISSION and IO_PORT_FUNCTION are set */
 #if IO_PORT_PERMISSION == 0 || IO_PORT_FUNCTION == 0
 #error Unsupported or misconfigured platform.
