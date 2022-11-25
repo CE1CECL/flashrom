@@ -27,7 +27,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -35,7 +34,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
+
+#ifdef __MINGW32_VERSION
+#include "libpci/pci.h"
+#include "direct_io.h"
+#else
+#include <sys/mman.h>
 #include <pci/pci.h>
+#endif
 
 /* for iopl */
 #if defined (__sun) && (defined(__i386) || defined(__amd64))
@@ -104,6 +110,14 @@ int map_flash_registers(struct flashchip *flash)
 	volatile uint8_t *registers;
 	size_t size = flash->total_size * 1024;
 
+#ifdef __MINGW32_VERSION
+	registers = map_physical_addr_range((0xFFFFFFFF - 0x400000 - size + 1), size);
+ 	if (registers == NULL) {
+ 		perror("Can't map registers");
+ 		cleanup_driver();
+ 		exit(1);
+ 	}
+#else
 	registers = mmap(0, size, PROT_WRITE | PROT_READ, MAP_SHARED,
 			 fd_mem, (off_t) (0xFFFFFFFF - 0x400000 - size + 1));
 
@@ -111,6 +125,8 @@ int map_flash_registers(struct flashchip *flash)
 		perror("Can't mmap registers using " MEM_DEV);
 		exit(1);
 	}
+#endif
+	
 	flash->virtual_registers = registers;
 
 	return 0;
@@ -139,6 +155,14 @@ struct flashchip *probe_flash(struct flashchip *flash)
 		flash_baseaddr = (0xffffffff - size + 1);
 #endif
 
+#ifdef	__MINGW32_VERSION	
+		bios = map_physical_addr_range(flash_baseaddr, size);
+		if (bios == NULL) {
+ 			perror("Can't map bios chip");
+ 			cleanup_driver();
+			exit(1);
+		}
+#else
 		/* If getpagesize() > size -> 
 		 * "Can't mmap memory using /dev/mem: Invalid argument"
 		 * This should never happen as we don't support any flash chips
@@ -157,6 +181,7 @@ struct flashchip *probe_flash(struct flashchip *flash)
 			perror("Can't mmap memory using " MEM_DEV);
 			exit(1);
 		}
+#endif //__MINGW32_VERSION
 		flash->virtual_memory = bios;
 
 		if (flash->probe(flash) == 1) {
@@ -164,8 +189,12 @@ struct flashchip *probe_flash(struct flashchip *flash)
 			       flash->name, flash_baseaddr);
 			return flash;
 		}
-		munmap((void *)bios, size);
 
+#ifdef	__MINGW32_VERSION
+		unmap_physical_addr_range((void*)bios, size);	
+#else	
+		munmap((void *)bios, size);
+#endif
 		flash++;
 	}
 	return NULL;
@@ -338,29 +367,38 @@ int main(int argc, char *argv[])
 		filename = argv[optind++];
 
 	/* First get full io access */
+/* // I don't know yet how to include #ifdef __MINGW32_VERSION here :-(	
 #if defined (__sun) && (defined(__i386) || defined(__amd64))
 	if (sysi86(SI86V86, V86SC_IOPL, PS_IOPL) != 0) {
-#else
+#else 
 	if (iopl(3) != 0) {
 #endif
 		fprintf(stderr, "ERROR: iopl failed: \"%s\"\n",
 			strerror(errno));
 		exit(1);
 	}
-
+*/
+#ifdef __MINGW32_VERSION
+ 	if( init_driver() == 0)
+ 	{
+ 		printf("Error: failed to initialize driver interface\n");
+ 		exit(1);
+ 	}
+#endif
 	/* Initialize PCI access for flash enables */
 	pacc = pci_alloc();	/* Get the pci_access structure */
 	/* Set all options you want -- here we stick with the defaults */
 	pci_init(pacc);		/* Initialize the PCI library */
 	pci_scan_bus(pacc);	/* We want to get the list of devices */
 
+#ifndef __MINGW32_VERSION	
 	/* Open the memory device. A lot of functions need it */
 	if ((fd_mem = open(MEM_DEV, O_RDWR)) < 0) {
 		perror("Error: Can not access memory using " MEM_DEV
 		       ". You need to be root.");
 		exit(1);
 	}
-
+#endif
 	myusec_calibrate_delay();
 
 	/* We look at the lbtable first to see if we need a
@@ -381,6 +419,9 @@ int main(int argc, char *argv[])
 
 	if ((flash = probe_flash(flashchips)) == NULL) {
 		printf("No EEPROM/flash device found.\n");
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 		exit(1);
 	}
 
@@ -389,6 +430,9 @@ int main(int argc, char *argv[])
 	if (!filename && !erase_it) {
 		// FIXME: Do we really want this feature implicitly?
 		printf("OK, only ENABLING flash write, but NOT FLASHING.\n");
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 		return 0;
 	}
 
@@ -398,10 +442,16 @@ int main(int argc, char *argv[])
 	if (erase_it) {
 		printf("Erasing flash chip\n");
 		flash->erase(flash);
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 		exit(0);
 	} else if (read_it) {
-		if ((image = fopen(filename, "w")) == NULL) {
+		if ((image = fopen(filename, "wb")) == NULL) {
 			perror(filename);
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 			exit(1);
 		}
 		printf("Reading Flash...");
@@ -420,16 +470,25 @@ int main(int argc, char *argv[])
 	} else {
 		struct stat image_stat;
 
-		if ((image = fopen(filename, "r")) == NULL) {
+		if ((image = fopen(filename, "rb")) == NULL) {
 			perror(filename);
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 			exit(1);
 		}
 		if (fstat(fileno(image), &image_stat) != 0) {
 			perror(filename);
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 			exit(1);
 		}
 		if (image_stat.st_size != flash->total_size * 1024) {
 			fprintf(stderr, "Error: Image size doesnt match\n");
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 			exit(1);
 		}
 
@@ -471,5 +530,9 @@ int main(int argc, char *argv[])
 	if (verify_it)
 		ret |= verify_flash(flash, buf);
 
+#ifdef __MINGW32_VERSION
+	cleanup_driver();
+#endif
 	return ret;
 }
+

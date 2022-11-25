@@ -32,6 +32,7 @@
 #include "sst28sf040.h"
 #include "sst49lfxxxc.h"
 #include "w49f002u.h"
+#include "w39v040fa.h"
 #include "sst39sf020.h"
 #include "sst49lf040.h"
 #include "pm49fl004.h"
@@ -105,7 +106,7 @@ struct flashchip flashchips[] = {
 	{"W49V002FA", 	WINBOND_ID, 	W_49V002FA,	256, 128,
 	 probe_jedec,	erase_chip_jedec, write_49f002},
 	{"W39V040FA", 	WINBOND_ID, 	W_39V040FA,	512, 64*1024,
-	 probe_jedec,	erase_chip_jedec, write_39sf020},
+	 probe_jedec,	erase_chip_jedec, write_39v040fa},
 	{"W39V040A", 	WINBOND_ID, 	W_39V040A,	512, 64*1024,
 	 probe_jedec,	erase_chip_jedec, write_39sf020},
 	{"W39V040B",    WINBOND_ID,     W_39V040B,      512, 64*1024,

@@ -200,7 +200,7 @@ static int doc_wait(volatile uint8_t *bios, int timeout)
 	doc_read_4nop(bios);
 
 	while (_doc_busy(bios) && (i != 0)) {
-		usleep(timeout * 1000 / 20);
+		myusec_delay(timeout * 1000 / 20);
 		i--;
 	}
 

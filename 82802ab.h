@@ -43,7 +43,7 @@ extern __inline__ void protect_82802ab(volatile uint8_t *bios)
 	*(volatile uint8_t *)(bios + 0x2AAA) = 0x55;
 	*(volatile uint8_t *)(bios + 0x5555) = 0xA0;
 
-	usleep(200);
+	myusec_delay(200);
 }
 
 #endif				/* !__82802AB_H__ */

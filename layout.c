@@ -6,6 +6,10 @@
 #include "lbtable.h"
 #include "debug.h"
 
+#ifdef __MINGW32_VERSION
+#include "direct_io.h"
+#endif
+
 char *mainboard_vendor = NULL;
 char *mainboard_part = NULL;
 int romimages = 0;
@@ -90,6 +94,9 @@ int show_id(uint8_t *bios, int size)
 			       "values with --mainboard <vendor>:<mainboard>.\n\n",
 			       mainboard_vendor, mainboard_part, lb_vendor,
 			       lb_part);
+#ifdef __MINGW32_VERSION
+			cleanup_driver();
+#endif
 			exit(1);
 		}
 	}

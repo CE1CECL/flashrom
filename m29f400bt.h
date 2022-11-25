@@ -48,7 +48,7 @@ extern __inline__ void protect_m29f400bt(volatile uint8_t *bios)
 	*(volatile uint8_t *)(bios + 0x555) = 0x55;
 	*(volatile uint8_t *)(bios + 0xAAA) = 0xA0;
 
-	usleep(200);
+	myusec_delay(200);
 }
 
 extern __inline__ void write_page_m29f400bt(volatile uint8_t *bios,

@@ -16,12 +16,14 @@
  */
 
 #include <stdio.h>
-#include <pci/pci.h>
+#include "libpci/pci.h"
 #include <stdint.h>
 #include <string.h>
 
 #include "flash.h"
 #include "debug.h"
+
+#include "direct_io.h"
 
 /*
  * Helper functions for many Winbond superIOs of the w836xx range.

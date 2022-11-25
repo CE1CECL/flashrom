@@ -29,10 +29,10 @@
 #include <sys/types.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/mman.h>
 #include "flash.h"
 #include "linuxbios_tables.h"
 #include "debug.h"
+#include "direct_io.h"
 
 char *lb_part = NULL, *lb_vendor = NULL;
 
@@ -181,12 +181,23 @@ int linuxbios_init(void)
 	struct lb_header *lb_table;
 	struct lb_record *rec, *last;
 
+#ifdef __MINGW32_VERSION
+	low_1MB = map_physical_addr_range(0x00000000, 1024 * 1024);
+	if (low_1MB == NULL) {
+		perror("Can't map low 1MB");
+		cleanup_driver();
+		exit(-2);
+	}
+#else
 	low_1MB = mmap(0, 1024 * 1024, PROT_READ, MAP_SHARED, fd_mem,
 		       0x00000000);
 	if (low_1MB == MAP_FAILED) {
 		perror("Can't mmap memory using " MEM_DEV);
 		exit(-2);
 	}
+#endif	
+
+	
 	lb_table = 0;
 	if (!lb_table)
 		lb_table = find_lb_table(low_1MB, 0x00000, 0x1000);

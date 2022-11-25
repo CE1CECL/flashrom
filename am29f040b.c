@@ -24,9 +24,11 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <windows.h>
 #include "flash.h"
 #include "jedec.h"
 #include "debug.h"
+//#include "udelay.h"
 
 static __inline__ int erase_sector_29f040b(volatile uint8_t *bios,
 					   unsigned long address)
@@ -38,7 +40,7 @@ static __inline__ int erase_sector_29f040b(volatile uint8_t *bios,
 	*(bios + 0x2AA) = 0x55;
 	*(bios + address) = 0x30;
 
-	sleep(2);
+	myusec_delay(2000000);
 
 	/* wait for Toggle bit ready         */
 	toggle_ready_jedec(bios + address);

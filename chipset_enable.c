@@ -12,11 +12,13 @@
  */
 
 #include <stdio.h>
-#include <pci/pci.h>
+#include "libpci/pci.h"
 #include <stdlib.h>
 
 #include "flash.h"
 #include "debug.h"
+
+#include "direct_io.h"
 
 static int enable_flash_ali_m1533(struct pci_dev *dev, char *name)
 {
@@ -333,6 +335,9 @@ static int enable_flash_sb400(struct pci_dev *dev, char *name)
 
 	if (!smbusdev) {
 		fprintf(stderr, "ERROR: SMBus device not found. aborting\n");
+#ifdef __MINGW32_VERSION
+		cleanup_driver();
+#endif
 		exit(1);
 	}
 

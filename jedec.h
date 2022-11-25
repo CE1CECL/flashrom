@@ -1,5 +1,8 @@
 #ifndef __JEDEC_H__
 #define __JEDEC_H__ 1
+
+#include "udelay.h"
+
 int write_byte_program_jedec(volatile uint8_t *bios, uint8_t *src,
 			     volatile uint8_t *dst);
 
@@ -51,7 +54,7 @@ extern __inline__ void unprotect_jedec(volatile uint8_t *bios)
 	*(volatile uint8_t *)(bios + 0x2AAA) = 0x55;
 	*(volatile uint8_t *)(bios + 0x5555) = 0x20;
 
-	usleep(200);
+	myusec_delay(200);
 }
 
 extern __inline__ void protect_jedec(volatile uint8_t *bios)
@@ -60,7 +63,7 @@ extern __inline__ void protect_jedec(volatile uint8_t *bios)
 	*(volatile uint8_t *)(bios + 0x2AAA) = 0x55;
 	*(volatile uint8_t *)(bios + 0x5555) = 0xA0;
 
-	usleep(200);
+	myusec_delay(200);
 }
 
 #endif				/* !__JEDEC_H__ */
