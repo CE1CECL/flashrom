@@ -26,7 +26,7 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #endif
-#if IS_WINDOWS
+#if IS_MINGW
 #include <conio.h>
 #else
 #include <termios.h>

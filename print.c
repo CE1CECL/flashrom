@@ -516,7 +516,7 @@ int print_supported(void)
 
 static void print_sysinfo(void)
 {
-#if IS_WINDOWS
+#if IS_MINGW
 	SYSTEM_INFO si = { 0 };
 	OSVERSIONINFOEX osvi = { 0 };
 
@@ -525,6 +525,29 @@ static void print_sysinfo(void)
 	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
 	if (GetVersionEx((OSVERSIONINFO*) &osvi))
 		msg_ginfo(" %lu.%lu", osvi.dwMajorVersion, osvi.dwMinorVersion);
+	else
+		msg_ginfo(" unknown version");
+	GetSystemInfo(&si);
+	switch (si.wProcessorArchitecture) {
+	case PROCESSOR_ARCHITECTURE_AMD64:
+		msg_ginfo(" (x86_64)");
+		break;
+	case PROCESSOR_ARCHITECTURE_INTEL:
+		msg_ginfo(" (x86)");
+		break;
+	default:
+		msg_ginfo(" (unknown arch)");
+		break;
+	}
+#elif IS_WINDOWS
+	SYSTEM_INFO si = { 0 };
+	OSVERSIONINFOEX osvi = { 0 };
+
+	msg_ginfo(" on Windows");
+	/* Tell Windows which version of the structure we want. */
+	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+	if (GetVersionEx((OSVERSIONINFO*) &osvi))
+		msg_ginfo(" %d.%d", osvi.dwMajorVersion, osvi.dwMinorVersion);
 	else
 		msg_ginfo(" unknown version");
 	GetSystemInfo(&si);

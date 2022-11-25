@@ -24,7 +24,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <inttypes.h>
-#if IS_WINDOWS
+#if IS_MINGW
 #include <conio.h>
 #else
 #include <termios.h>
@@ -157,7 +157,7 @@ int serialport_config(fdtype fd, int baud)
 		return 1;
 	}
 
-#if IS_WINDOWS
+#if IS_MINGW
 	DCB dcb;
 	if (!GetCommState(fd, &dcb)) {
 		msg_perr_strerror("Could not fetch original serial port configuration: ");
@@ -178,6 +178,27 @@ int serialport_config(fdtype fd, int baud)
 		return 1;
 	}
 	msg_pdbg("Baud rate is %ld.\n", dcb.BaudRate);
+#elif IS_WINDOWS
+	DCB dcb;
+	if (!GetCommState(fd, &dcb)) {
+		msg_perr_strerror("Could not fetch original serial port configuration: ");
+		return 1;
+	}
+	if (baud >= 0) {
+		dcb.BaudRate = baud;
+	}
+	dcb.ByteSize = 8;
+	dcb.Parity = NOPARITY;
+	dcb.StopBits = ONESTOPBIT;
+	if (!SetCommState(fd, &dcb)) {
+		msg_perr_strerror("Could not change serial port configuration: ");
+		return 1;
+	}
+	if (!GetCommState(fd, &dcb)) {
+		msg_perr_strerror("Could not fetch new serial port configuration: ");
+		return 1;
+	}
+	msg_pdbg("Baud rate is %d.\n", dcb.BaudRate);
 #else
 	struct termios wanted, observed;
 	if (tcgetattr(fd, &observed) != 0) {
@@ -488,13 +509,20 @@ int serialport_read_nonblock(unsigned char *c, unsigned int readcnt, unsigned in
 	unsigned int rd_bytes = 0;
 	for (i = 0; i < timeout; i++) {
 		msg_pspew("readcnt %u rd_bytes %u\n", readcnt, rd_bytes);
-#if IS_WINDOWS
+#if IS_MINGW
 		if (!ReadFile(sp_fd, c + rd_bytes, readcnt - rd_bytes, &rv, NULL)) {
 			msg_perr_strerror("Serial port read error: ");
 			ret = -1;
 			break;
 		}
 		msg_pspew("read %lu bytes\n", rv);
+#elif IS_WINDOWS
+		if (!ReadFile(sp_fd, c + rd_bytes, readcnt - rd_bytes, &rv, NULL)) {
+			msg_perr_strerror("Serial port read error: ");
+			ret = -1;
+			break;
+		}
+		msg_pspew("read %d bytes\n", rv);
 #else
 		rv = read(sp_fd, c + rd_bytes, readcnt - rd_bytes);
 		msg_pspew("read %zd bytes\n", rv);
@@ -572,13 +600,20 @@ int serialport_write_nonblock(const unsigned char *buf, unsigned int writecnt, u
 	unsigned int wr_bytes = 0;
 	for (i = 0; i < timeout; i++) {
 		msg_pspew("writecnt %u wr_bytes %u\n", writecnt, wr_bytes);
-#if IS_WINDOWS
+#if IS_MINGW
 		if (!WriteFile(sp_fd, buf + wr_bytes, writecnt - wr_bytes, &rv, NULL)) {
 			msg_perr_strerror("Serial port write error: ");
 			ret = -1;
 			break;
 		}
 		msg_pspew("wrote %lu bytes\n", rv);
+#elif IS_WINDOWS
+		if (!WriteFile(sp_fd, buf + wr_bytes, writecnt - wr_bytes, &rv, NULL)) {
+			msg_perr_strerror("Serial port write error: ");
+			ret = -1;
+			break;
+		}
+		msg_pspew("wrote %d bytes\n", rv);
 #else
 		rv = write(sp_fd, buf + wr_bytes, writecnt - wr_bytes);
 		msg_pspew("wrote %zd bytes\n", rv);

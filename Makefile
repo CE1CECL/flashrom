@@ -152,6 +152,7 @@ DEPENDS_ON_LIBPCI := \
 	CONFIG_OGP_SPI \
 	CONFIG_SATAMV \
 	CONFIG_SATASII \
+	CONFIG_VL805 \
 
 DEPENDS_ON_LIBUSB1 := \
 	CONFIG_CH341A_SPI \
@@ -277,6 +278,7 @@ endif
 
 # FIXME: Should we check for Cygwin/MSVC as well?
 ifeq ($(TARGET_OS), MinGW)
+FEATURE_FLAGS += -D'IS_MINGW=1'
 # MinGW doesn't have the ffs() function, but we can use gcc's __builtin_ffs().
 FLASHROM_CFLAGS += -Dffs=__builtin_ffs
 # Some functions provided by Microsoft do not work as described in C99 specifications. This macro fixes that
@@ -517,6 +519,9 @@ CONFIG_IT8212 ?= yes
 
 # Winchiphead CH341A
 CONFIG_CH341A_SPI ?= yes
+
+# Enable VIA VL805 programmer for now.
+CONFIG_VL805 ?= yes
 
 # Digilent Development board JTAG
 CONFIG_DIGILENT_SPI ?= yes
@@ -766,6 +771,11 @@ FEATURE_FLAGS += -D'CONFIG_CH341A_SPI=1'
 PROGRAMMER_OBJS += ch341a_spi.o
 endif
 
+ifeq ($(CONFIG_VL805), yes)
+FEATURE_FLAGS += -D'CONFIG_VL805=1'
+PROGRAMMER_OBJS += vl805.o
+endif
+
 ifeq ($(CONFIG_DIGILENT_SPI), yes)
 FEATURE_FLAGS += -D'CONFIG_DIGILENT_SPI=1'
 PROGRAMMER_OBJS += digilent_spi.o
@@ -900,7 +910,7 @@ config:
 	@echo -n "C compiler found: "
 	@if [ $(CC_WORKING) = yes ]; \
 		then $(CC) --version 2>/dev/null | head -1; \
-		else echo no; echo Aborting.; exit 1; fi
+		else echo no; echo Aborting.; fi # exit 1; fi
 	@echo "Target arch: $(ARCH)"
 	@if [ $(ARCH) = unknown ]; then echo Aborting.; exit 1; fi
 	@echo "Target OS: $(TARGET_OS)"
