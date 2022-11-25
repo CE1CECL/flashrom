@@ -278,6 +278,7 @@ endif
 
 # FIXME: Should we check for Cygwin/MSVC as well?
 ifeq ($(TARGET_OS), MinGW)
+FEATURE_FLAGS += -D'IS_MINGW=1'
 # MinGW doesn't have the ffs() function, but we can use gcc's __builtin_ffs().
 FLASHROM_CFLAGS += -Dffs=__builtin_ffs
 # Some functions provided by Microsoft do not work as described in C99 specifications. This macro fixes that
@@ -909,7 +910,7 @@ config:
 	@echo -n "C compiler found: "
 	@if [ $(CC_WORKING) = yes ]; \
 		then $(CC) --version 2>/dev/null | head -1; \
-		else echo no; echo Aborting.; exit 1; fi
+		else echo no; echo Aborting.; fi # exit 1; fi
 	@echo "Target arch: $(ARCH)"
 	@if [ $(ARCH) = unknown ]; then echo Aborting.; exit 1; fi
 	@echo "Target OS: $(TARGET_OS)"
