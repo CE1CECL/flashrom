@@ -24,6 +24,11 @@
  * Contains the chipset specific flash enables.
  */
 
+#if IS_WINDOWS
+# define getpagesize() 65536
+# define O_SYNC 8192
+#endif
+
 #define _LARGEFILE64_SOURCE
 
 #include <stdlib.h>

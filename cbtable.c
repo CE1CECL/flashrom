@@ -18,6 +18,11 @@
  * GNU General Public License for more details.
  */
 
+#if IS_WINDOWS
+# define getpagesize() 65536
+# define O_SYNC 8192
+#endif
+
 #include <unistd.h>
 #include <stdio.h>
 #include <ctype.h>

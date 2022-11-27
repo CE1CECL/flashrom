@@ -30,6 +30,11 @@
  * http://www.intel.com/content/dam/www/public/us/en/documents/datasheets/82599-10-gbe-controller-datasheet.pdf
  */
 
+#if IS_WINDOWS
+# define getpagesize() 65536
+# define O_SYNC 8192
+#endif
+
 #include <stdlib.h>
 #include <unistd.h>
 #include "flash.h"
