@@ -271,6 +271,7 @@ ifeq ($(TARGET_OS), $(filter $(TARGET_OS), MinGW Cygwin))
 #$(call mark_unsupported,$(DEPENDS_ON_RAW_MEM_ACCESS))
 #$(call mark_unsupported,$(DEPENDS_ON_X86_PORT_IO))
 #$(call mark_unsupported,$(DEPENDS_ON_X86_MSR))
+override LDFLAGS += -lmman
 FEATURE_FLAGS += -D'IS_WINDOWS=1'
 else
 FEATURE_FLAGS += -D'IS_WINDOWS=0'
