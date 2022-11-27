@@ -157,7 +157,6 @@
 #if IS_WINDOWS
 
 #include <io.h>
-#include <sys/uio.h>
 #include <windows.h>
 #include <aclapi.h>
 
