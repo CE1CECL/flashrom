@@ -46,7 +46,7 @@ CFLAGS += -D__USE_MINGW_ANSI_STDIO=1
 endif
 
 ifeq ($(WARNERROR), yes)
-CFLAGS += -Werror
+CFLAGS += -W
 endif
 
 
