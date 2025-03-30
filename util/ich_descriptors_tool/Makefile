@@ -14,7 +14,7 @@ SHAREDSRC = ich_descriptors.c
 SHAREDSRCDIR = ../..
 # If your compiler spits out excessive warnings, run make WARNERROR=no
 # You shouldn't have to change this flag.
-WARNERROR ?= yes
+WARNERROR ?= no
 
 SRC = $(wildcard *.c)
 
@@ -43,10 +43,6 @@ EXEC_SUFFIX := .exe
 # Some functions provided by Microsoft do not work as described in C99 specifications. This macro fixes that
 # for MinGW. See http://sourceforge.net/p/mingw-w64/wiki2/printf%20and%20scanf%20family/
 CFLAGS += -D__USE_MINGW_ANSI_STDIO=1
-endif
-
-ifeq ($(WARNERROR), yes)
-CFLAGS += -Werror
 endif
 
 

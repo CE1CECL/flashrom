@@ -60,6 +60,7 @@ extern const struct programmer_entry programmer_atahpt;
 extern const struct programmer_entry programmer_atapromise;
 extern const struct programmer_entry programmer_atavia;
 extern const struct programmer_entry programmer_buspirate_spi;
+extern const struct programmer_entry programmer_vl805;
 extern const struct programmer_entry programmer_ch341a_spi;
 extern const struct programmer_entry programmer_ch347_spi;
 extern const struct programmer_entry programmer_dediprog;

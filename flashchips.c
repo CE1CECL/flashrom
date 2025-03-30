@@ -19134,7 +19134,7 @@ const struct flashchip flashchips[] = {
 		.page_size	= 256,
 		.feature_bits	= FEATURE_WRSR_WREN,
 		.tested		= TEST_OK_PREW,
-		.probe		= PROBE_SPI_RDID,
+		.probe		= PROBE_SPI_RDID4,
 		.probe_timing	= TIMING_ZERO,
 		.block_erasers	=
 		{
@@ -19166,7 +19166,7 @@ const struct flashchip flashchips[] = {
 		.page_size	= 256,
 		.feature_bits	= FEATURE_WRSR_WREN,
 		.tested		= TEST_OK_PREW,
-		.probe		= PROBE_SPI_RDID,
+		.probe		= PROBE_SPI_RDID4,
 		.probe_timing	= TIMING_ZERO,
 		.block_erasers	=
 		{
